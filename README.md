@@ -122,26 +122,26 @@
 
 ### 步骤五：配置 Nginx 和 SSL (HTTPS)
 
-假设您已使用 Certbot 为您的域名 `istill.live` 获取了证书，且证书路径为 `/etc/letsencrypt/live/istill.live/`。
+假设您已使用 Certbot 为您的域名 `xxx.com` 获取了证书，且证书路径为 `/etc/letsencrypt/live/xxx.com/`。
 
-1.  **创建或编辑 Nginx 配置文件** (`/etc/nginx/sites-available/istill.live`):
+1.  **创建或编辑 Nginx 配置文件** (`/etc/nginx/sites-available/xxx.com`):
     确保配置包含了 HTTP 到 HTTPS 的重定向，并将 HTTPS 流量转发到 Gunicorn 的 Unix Socket。
 
     ```nginx
     server {
         listen 80;
         listen [::]:80;
-        server_name istill.live;
+        server_name xxx.com;
         return 301 https://$host$request_uri;
     }
 
     server {
         listen 443 ssl http2;
         listen [::]:443 ssl http2;
-        server_name istill.live;
+        server_name xxx.com;
 
-        ssl_certificate /etc/letsencrypt/live/istill.live/fullchain.pem; 
-        ssl_certificate_key /etc/letsencrypt/live/istill.live/privkey.pem;
+        ssl_certificate /etc/letsencrypt/live/xxx.com/fullchain.pem; 
+        ssl_certificate_key /etc/letsencrypt/live/xxx.com/privkey.pem;
 
         include /etc/letsencrypt/options-ssl-nginx.conf;
         ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
@@ -159,7 +159,7 @@
 2.  **启用配置并重启 Nginx:**
 
     ```bash
-    sudo ln -s /etc/nginx/sites-available/istill.live /etc/nginx/sites-enabled/
+    sudo ln -s /etc/nginx/sites-available/xxx.com /etc/nginx/sites-enabled/
     sudo nginx -t
     sudo systemctl reload nginx
     ```
@@ -168,8 +168,8 @@
 
 ## 🌍 使用方法
 
-  * **短链接访问:** `https://istill.live/您的短码` (例如：`https://istill.live/clash`)
-  * **管理后台:** `https://istill.live/login`
+  * **短链接访问:** `https://xxx.com/您的短码` (例如：`https://xxx.com/clash`)
+  * **管理后台:** `https://xxx.com/login`
       * 使用初始管理员账户登录后，即可创建、编辑和删除短链接。
       * **强烈建议** 登录后立即修改管理员密码。
 
@@ -180,3 +180,6 @@
 1.  **修改初始密码:** 首次登录后，请通过 SQL 命令或实现页面功能来修改初始管理员密码。
 2.  **数据库备份:** 定期备份 `url_shortener_db` 数据库。
 3.  **Certbot 续期:** Certbot 应该已经配置自动续期，但请定期检查续期任务是否正常工作。
+
+## 联系开发者
+mailto: do@eiai.studio
