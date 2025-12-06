@@ -1,5 +1,7 @@
 # 🔗 URL Shortener (可私有化部署的短链接服务)
 
+<img width="2048" height="1502" alt="image" src="https://github.com/user-attachments/assets/08015c5a-0595-4785-8f76-24c1aec8b667" />
+
 ## 简介
 
 本项目是一个基于 **Python Flask** 搭建的、带管理后台的短链接服务（URL Shortener）。它支持将任意长链接转换为简短、易于分享的短码，并提供管理员登录界面进行链接管理、添加备注、自定义短码和查看点击量等功能。
