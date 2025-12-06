@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}链接管理面板{% endblock %}
+
+{% block content %}
+    <h1>短链接管理</h1>
+
+    <h3>新建短链接</h3>
+    <form method="POST" action="{{ url_for('create_link') }}">
+        <label for="original_url">长链接 (必填):</label>
+        <input type="url" id="original_url" name="original_url" size="60" required><br><br>
+        
+        <label for="custom_code">自定义短码 (可选):</label>
+        <input type="text" id="custom_code" name="custom_code" pattern="[a-zA-Z0-9_-]+" title="只能包含字母、数字、下划线和短横线"><br><br>
+        
+        <label for="note">备注 (可选):</label>
+        <input type="text" id="note" name="note" size="40"><br><br>
+        
+        <button type="submit">创建链接</button>
+    </form>
+
+    <hr>
+
+    <h3>现有链接列表 (共 {{ links|length }} 条)</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>短码</th>
+                <th>长链接</th>
+                <th>备注</th>
+                <th>点击量</th>
+                <th>创建时间</th>
+		<th>操作</th>
+                </tr>
+        </thead>
+        <tbody>
+            {% for link in links %}
+            <tr>
+                <td>
+                    <a href="https://istill.live/{{ link.short_code }}" target="_blank">
+                        {{ link.short_code }}
+                    </a>
+                </td>
+                <td title="{{ link.original_url }}">{{ link.original_url[:50] }}...</td>
+                <td>{{ link.note }}</td>
+                <td>{{ link.clicks }}</td>
+                <td>{{ link.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>
+                <a href="{{ url_for('edit_link', short_code=link.short_code) }}">编辑</a>
+
+                 |
+   
+                 <form method="POST" action="{{ url_for('delete_link', short_code=link.short_code) }}" style="display:inline;">
+                   <button type="submit" onclick="return confirm('确定要删除短码 {{ link.short_code }} 吗？这将无法恢复！');" style="color:red; background:none; border:none; cursor:pointer; padding:0;">
+                      删除
+                   </button>
+                 </form>
+                </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

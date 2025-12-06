@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block title %}编辑链接: {{ link.short_code }}{% endblock %}
+
+{% block content %}
+    <h2>编辑短链接：{{ link.short_code }}</h2>
+    <p>短链接地址: <a href="https://istill.live/{{ link.short_code }}" target="_blank">https://istill.live/{{ link.short_code }}</a></p>
+
+    <form method="POST">
+        <input type="hidden" name="short_code" value="{{ link.short_code }}">
+
+        <label for="original_url">长链接 (必填):</label>
+        <input type="url" id="original_url" name="original_url" size="80" value="{{ link.original_url }}" required><br><br>
+        
+        <label for="note">备注 (可选):</label>
+        <input type="text" id="note" name="note" size="40" value="{{ link.note }}"><br><br>
+        
+        <button type="submit">保存修改</button>
+        <a href="{{ url_for('admin_dashboard') }}">取消并返回</a>
+    </form>
+{% endblock %}
