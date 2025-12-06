@@ -1,0 +1,212 @@
+import random
+import string
+from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+
+app = Flask(__name__)
+
+# --- 配置 ---
+# 请替换为你在步骤二中设置的数据库凭证
+app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://shortener_user:your_strong_password@localhost/url_shortener_db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SECRET_KEY'] = '123456' # ⚠️ 生产环境必须替换为随机强密钥！
+
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login' # 未登录时重定向的视图函数
+
+# --- 数据库模型 ---
+
+class Link(db.Model):
+    __tablename__ = 'links'
+    id = db.Column(db.Integer, primary_key=True)
+    short_code = db.Column(db.String(50), unique=True, nullable=False)
+    original_url = db.Column(db.String(2048), nullable=False)
+    note = db.Column(db.String(255), default='')
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    clicks = db.Column(db.Integer, default=0)
+
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255))
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+# --- 首页 ---
+
+@app.route('/')
+def index():
+    
+    return render_template('index.html') 
+
+# --- 登录管理器回调 ---
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# --- 辅助函数 ---
+
+def generate_unique_short_code(length=6):
+    """生成唯一的随机短码"""
+    characters = string.ascii_letters + string.digits
+    while True:
+        code = ''.join(random.choice(characters) for i in range(length))
+        if Link.query.filter_by(short_code=code).first() is None:
+            return code
+
+# --- 路由：短链接跳转 ---
+
+@app.route('/<short_code>')
+def redirect_to_url(short_code):
+    link = Link.query.filter_by(short_code=short_code).first_or_404()
+    link.clicks += 1
+    db.session.commit()
+    # 确保 URL 包含协议头
+    if not link.original_url.startswith(('http://', 'https://')):
+        return redirect('http://' + link.original_url, code=302)
+    return redirect(link.original_url, code=302)
+
+# --- 路由：登录 ---
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('admin_dashboard'))
+
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        user = User.query.filter_by(username=username).first()
+
+        if user and user.check_password(password):
+            login_user(user)
+            return redirect(url_for('admin_dashboard'))
+        else:
+            flash('用户名或密码错误。', 'danger')
+
+    # 简单的登录表单，你需要在 templates/login.html 中实现它
+    return render_template('login.html')
+
+# --- 路由：登出 ---
+
+@app.route('/logout')
+@login_required
+def logout():
+    """处理用户登出"""
+    logout_user()
+    flash('您已成功退出登录。', 'info')
+    return redirect(url_for('login')) 
+    # 或者重定向到主页，如果将来有主页的话
+
+# --- 路由：管理后台 ---
+
+@app.route('/admin')
+@login_required
+def admin_dashboard():
+    links = Link.query.order_by(Link.created_at.desc()).all()
+    # 简单的管理页面，你需要在 templates/admin.html 中实现它
+    return render_template('admin.html', links=links)
+
+# --- 路由：创建新链接 ---
+
+@app.route('/admin/create', methods=['POST'])
+@login_required
+def create_link():
+    original_url = request.form.get('original_url')
+    custom_code = request.form.get('custom_code')
+    note = request.form.get('note', '')
+
+    if not original_url:
+        flash('长链接不能为空。', 'danger')
+        return redirect(url_for('admin_dashboard'))
+
+    if custom_code:
+        # 检查自定义短码是否已存在
+        if Link.query.filter_by(short_code=custom_code).first():
+            flash(f'短码 "{custom_code}" 已被占用。', 'danger')
+            return redirect(url_for('admin_dashboard'))
+        short_code = custom_code
+    else:
+        short_code = generate_unique_short_code()
+
+    new_link = Link(
+        original_url=original_url,
+        short_code=short_code,
+        note=note
+    )
+    db.session.add(new_link)
+    db.session.commit()
+    flash(f'短链接创建成功! 短码: {short_code}', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+# --- 路由：编辑链接 (GET and POST) ---
+@app.route('/admin/edit/<short_code>', methods=['GET', 'POST'])
+@login_required
+def edit_link(short_code):
+    link = Link.query.filter_by(short_code=short_code).first_or_404()
+
+    if request.method == 'POST':
+        # 仅允许修改长链接和备注
+        link.original_url = request.form.get('original_url')
+        link.note = request.form.get('note', '')
+        
+        if not link.original_url:
+            flash('长链接不能为空。', 'danger')
+            return redirect(url_for('edit_link', short_code=short_code))
+
+        db.session.commit()
+        flash(f'短码 "{short_code}" 已成功更新!', 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    # GET 请求：显示编辑表单
+    return render_template('edit.html', link=link)
+
+
+# --- 路由：删除链接 (POST ONLY) ---
+@app.route('/admin/delete/<short_code>', methods=['POST'])
+@login_required
+def delete_link(short_code):
+    link = Link.query.filter_by(short_code=short_code).first_or_404()
+    
+    db.session.delete(link)
+    db.session.commit()
+    flash(f'短码 "{short_code}" 已被删除。', 'info')
+    return redirect(url_for('admin_dashboard'))
+
+
+# --- 初始化数据库和管理员账户 ---
+
+def init_db_and_admin():
+    """初始化数据库表并创建第一个管理员账户"""
+    with app.app_context():
+        db.create_all()
+
+        # 检查是否已有管理员用户
+        if User.query.filter_by(username='admin').first() is None:
+            admin_user = User(username='admin')
+            # ⚠️ 第一次运行时，请将 'initial_admin_password' 替换为你想要的密码
+            admin_user.set_password('123456') 
+            db.session.add(admin_user)
+            db.session.commit()
+            print("--- 重要的管理账户信息 ---")
+            print("管理员账户已创建。")
+            print("用户名: admin")
+            print("密码: 123456 (请务必在登录后修改或删除此函数)")
+            print("-------------------------")
+
+if __name__ == '__main__':
+    # 第一次运行：初始化数据库和管理员。
+    # ⚠️ 生产环境部署时，建议在命令行单独执行一次初始化，然后删除这一行
+    # init_db_and_admin() 
+    app.run(debug=True)
+
+# 生产环境将使用 Gunicorn 启动
