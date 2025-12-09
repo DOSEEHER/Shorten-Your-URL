@@ -188,9 +188,11 @@ def edit_link(short_code):
     link = Link.query.filter_by(short_code=short_code).first_or_404()
 
     if request.method == 'POST':
-        # 仅允许修改长链接和备注
+        # 1. 更新长链接和备注
         link.original_url = request.form.get('original_url')
         link.note = request.form.get('note', '')
+        # 2. 🚨 关键：更新 mode 字段
+        link.mode = request.form.get('mode', 'redirect') 
         
         if not link.original_url:
             flash('长链接不能为空。', 'danger')
@@ -199,6 +201,9 @@ def edit_link(short_code):
         db.session.commit()
         flash(f'短码 "{short_code}" 已成功更新!', 'success')
         return redirect(url_for('admin_dashboard'))
+
+    # GET 请求：显示编辑表单
+    return render_template('edit.html', link=link)
 
     # GET 请求：显示编辑表单
     return render_template('edit.html', link=link)

@@ -14,6 +14,16 @@
         
         <label for="note">备注 (可选):</label>
         <input type="text" id="note" name="note" size="40" value="{{ link.note }}"><br><br>
+
+        <label for="mode">链接模式 (必选):</label>
+        <select id="mode" name="mode" required>
+            <option value="redirect" {% if link.mode == 'redirect' %}selected{% endif %}>
+                跳转模式 - 可能暴露原始链接
+            </option>
+            <option value="proxy" {% if link.mode == 'proxy' %}selected{% endif %}>
+                代理模式 - 完全隐藏原始链接
+            </option>
+        </select><br><br>
         
         <button type="submit">保存修改</button>
         <a href="{{ url_for('admin_dashboard') }}">取消并返回</a>
