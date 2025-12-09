@@ -1,0 +1,16 @@
+# Python 虚拟环境
+venv/
+__pycache__/
+*.pyc
+
+# Flask/Web 临时文件
+instance/
+.flaskenv
+
+# Unix Socket
+*.sock
+/tmp/shortener.sock
+
+# 您的敏感配置（防止将密码上传到GitHub）
+# 如果您的数据库密码写在 app.py 里，请确保在上传前已移除或使用环境变量
+# config.py
