@@ -1,4 +1,4 @@
-# 🔗 URL Shortener (可私有化部署的短链接服务)
+# 🔗 Shorten Your URL / URL Shortener (可私有化部署的短链接服务)
 
 <img width="2048" height="1502" alt="image" src="https://github.com/user-attachments/assets/9856bc5f-4387-4c84-8a8c-a435ed3dac5d" />
 
