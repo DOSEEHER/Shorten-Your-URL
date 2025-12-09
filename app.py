@@ -1,6 +1,7 @@
 import random
 import string
 import requests
+import os
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -9,10 +10,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 
 # --- 配置 ---
-# 请替换为你在步骤二中设置的数据库凭证
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://shortener_user:your_strong_password@localhost/url_shortener_db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = '123456' # ⚠️ 生产环境必须替换为随机强密钥！
+# 从环境变量中读取数据库凭证
+DB_USER = os.environ.get('DB_USER', 'shortener_user')
+DB_PASS = os.environ.get('DB_PASS', 'default_secret') # ⚠️ 生产环境必须设置
+DB_HOST = os.environ.get('DB_HOST', 'localhost')
+DB_NAME = os.environ.get('DB_NAME', 'url_shortener_db')
+
+# 使用读取到的变量构建连接字符串
+app.config['SQLALCHEMY_DATABASE_URI'] = f'mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}'
+
+# ⚠️ 同样，修改 SECRET_KEY 从环境变量中读取
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default_insecure_key')
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
