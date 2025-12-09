@@ -1,14 +1,20 @@
 # 🔗 Shorten Your URL / URL Shortener (可私有化部署的短链接服务)
 
-<img width="2048" height="1502" alt="image" src="https://github.com/user-attachments/assets/9856bc5f-4387-4c84-8a8c-a435ed3dac5d" />
-
 ## 简介
 
-本项目是一个基于 **Python Flask** 搭建的、带管理后台的短链接服务（URL Shortener）。它支持将任意长链接转换为简短、易于分享的短码，并提供管理员登录界面进行链接管理、添加备注、自定义短码和查看点击量等功能。
+本项目是一个功能完备的、基于 **Python Flask** 搭建的短链接服务（URL Shortener）。它支持将任意长链接转换为简短、易于分享的短码，并提供安全的管理员登录界面进行全面的链接管理。
 
-### 🚀 技术栈
+### 🚀 核心功能与亮点
 
-  * **后端:** Python 3.x, Flask, Flask-SQLAlchemy, Flask-Login
+  * **双模式支持:** 支持 **跳转模式 (Redirect)** 和 **代理模式 (Proxying)**，用户在创建链接时可自行选择，以兼顾速度和隐私。
+      * **跳转模式:** 使用 302 状态码，跳转速度快，但目标 URL 在网络请求中可见。
+      * **代理模式:** 地址栏保持短链接不变，内容由后端获取并返回，可**彻底隐藏原始长链接**，适用于配置或静态文件共享。
+  * **完整的管理功能:** 支持新建链接、自定义短码、**编辑链接属性**、**删除链接** 和查看点击量。
+  * **安全部署:** 使用 **Systemd Environment** 变量安全地隔离数据库凭证和应用密钥。
+
+### ⚙️ 技术栈
+
+  * **后端:** Python 3.x, Flask, Flask-SQLAlchemy, Flask-Login, Requests
   * **数据库:** MySQL
   * **Web 服务器:** Gunicorn (WSGI) + Nginx (反向代理)
   * **部署环境:** Ubuntu 22.04 LTS
@@ -17,15 +23,15 @@
 
 ## 🛠️ 快速部署指南
 
-本指南假设您已拥有一个 **Ubuntu 22.04 VPS**，并已安装 **Nginx**, **MySQL** 和 **Python 3.10+** 环境。
+本指南侧重于使用 **Git** 和 **Systemd** 进行安全部署和更新。
 
 ### 步骤一：环境准备与依赖安装
 
-1.  **克隆项目并进入目录:**
+1.  **克隆或同步项目到 VPS:**
 
     ```bash
-    git clone [您的 GitHub 仓库地址] url_shortener
-    cd url_shortener
+    git clone [您的 GitHub 仓库地址] Shorten-Your-URL
+    cd Shorten-Your-URL
     ```
 
 2.  **创建并激活虚拟环境:**
@@ -35,15 +41,13 @@
     source venv/bin/activate
     ```
 
-3.  **安装 Python 依赖:**
+3.  **安装所有依赖:**
 
     ```bash
-    pip install Flask Flask-SQLAlchemy PyMySQL Flask-Login Gunicorn cryptography
+    pip install Flask Flask-SQLAlchemy PyMySQL Flask-Login Gunicorn cryptography requests
     ```
 
 ### 步骤二：数据库配置 (MySQL)
-
-您需要为应用程序创建一个专用的数据库和用户。
 
 1.  **登录 MySQL** (以 root 用户为例):
 
@@ -54,46 +58,35 @@
 2.  **创建数据库和用户:**
 
     ```sql
-    -- 替换 'shortener_user' 和 'your_strong_password'
+    -- 替换 'shortener_user' 和 'YOUR_DB_PASSWORD'
     CREATE DATABASE url_shortener_db;
-    CREATE USER 'shortener_user'@'localhost' IDENTIFIED BY 'your_strong_password';
+    CREATE USER 'shortener_user'@'localhost' IDENTIFIED BY 'YOUR_DB_PASSWORD';
     GRANT ALL PRIVILEGES ON url_shortener_db.* TO 'shortener_user'@'localhost';
     FLUSH PRIVILEGES;
     EXIT;
     ```
 
-    ⚠️ **重要：** 请将 **`your_strong_password`** 记录下来。
+    ⚠️ **重要：** 请记录 `YOUR_DB_PASSWORD`，用于下一步配置。
 
-### 步骤三：配置应用并初始化数据库
-
-1.  **修改 `app.py` 数据库连接:**
-    编辑 `app.py` 文件，更新 `SQLALCHEMY_DATABASE_URI` 为您在步骤二中设置的凭证：
-
-    ```python
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://shortener_user:your_strong_password@localhost/url_shortener_db'
-    ```
-
-2.  **运行初始化脚本:**
-    在虚拟环境内运行 `app.py` 一次，以创建数据库表并生成初始管理员账户。
+3.  **初始化数据库表结构和管理员账户:**
 
     ```bash
+    # 确保 app.py 中的 DB_USER, DB_NAME 设置正确（如果代码中有 default 值，此步应成功）
     python app.py
-    # 看到 Flask 启动提示和管理员信息后，按 Ctrl + C 停止。
+    # 记下终端输出的初始管理员用户名和密码 (如：admin/123456)。完成后 Ctrl + C 停止。
     ```
 
-    记下终端输出的初始管理员用户名（`admin` 或您自定义的）和密码。
+### 步骤三：Systemd 安全配置（环境变量）
 
-### 步骤四：配置 Gunicorn 守护进程 (Systemd)
+我们通过 Systemd 设置环境变量来隔离敏感信息。
 
-为了让应用在后台持续运行，我们使用 Systemd 进行管理。
-
-1.  **创建服务文件:**
+1.  **创建服务文件** (`/etc/systemd/system/url_shortener.service`):
 
     ```bash
     sudo nano /etc/systemd/system/url_shortener.service
     ```
 
-    粘贴以下内容 (请将 `root` 和 `/root/url_shortener` 替换为您实际的用户名和项目路径)：
+    粘贴以下内容（请替换 **路径** 和 **敏感变量**）：
 
     ```ini
     [Unit]
@@ -101,11 +94,19 @@
     After=network.target
 
     [Service]
-    User=root #如果提示用户权限问题，可将此注释掉
-    Group=root #如果提示用户权限问题，可将此注释掉
-    WorkingDirectory=/root/url_shortener
-    Environment="PATH=/root/url_shortener/venv/bin"
-    ExecStart=/root/url_shortener/venv/bin/gunicorn --workers 3 --bind unix:/tmp/shortener.sock app:app 
+    User=root  #如果出现权限提示，可尝试注释掉本行
+    Group=root  #如果出现权限提示，可尝试注释掉本行
+    WorkingDirectory=/root/Shorten-Your-URL
+
+    # 🚨 关键：在此处设置您的数据库密码和应用密钥
+    Environment="DB_PASS=YOUR_DB_PASSWORD"
+    Environment="SECRET_KEY=YOUR_APPLICATION_SECRET_KEY" 
+    Environment="DB_USER=shortener_user"
+    Environment="DB_NAME=url_shortener_db"
+
+    # 执行启动前，自动检查并安装依赖（增强稳定性）
+    ExecStartPre=/usr/bin/python3 -m venv venv || true
+    ExecStart=/root/Shorten-Your-URL/venv/bin/gunicorn --workers 3 --bind unix:/tmp/shortener.sock app:app
 
     [Install]
     WantedBy=multi-user.target
@@ -122,46 +123,19 @@
 
     确认服务状态为 `active (running)`。
 
-### 步骤五：配置 Nginx 和 SSL (HTTPS)
+### 步骤四：Nginx 配置和 SSL
 
-假设您已使用 Certbot 为您的域名 `xxx.com` 获取了证书，且证书路径为 `/etc/letsencrypt/live/xxx.com/`。
-
-1.  **创建或编辑 Nginx 配置文件** (`/etc/nginx/sites-available/xxx.com`):
-    确保配置包含了 HTTP 到 HTTPS 的重定向，并将 HTTPS 流量转发到 Gunicorn 的 Unix Socket。
-
+1.  **确保 Nginx 配置** (`/etc/nginx/sites-available/你的域名.conf`) 已包含 Certbot 证书路径和 HTTP 到 HTTPS 的重定向。
+2.  **确保 `location /` 块将流量转发到 Unix Socket:**
     ```nginx
-    server {
-        listen 80;
-        listen [::]:80;
-        server_name xxx.com;
-        return 301 https://$host$request_uri;
-    }
-
-    server {
-        listen 443 ssl http2;
-        listen [::]:443 ssl http2;
-        server_name xxx.com;
-
-        ssl_certificate /etc/letsencrypt/live/xxx.com/fullchain.pem; 
-        ssl_certificate_key /etc/letsencrypt/live/xxx.com/privkey.pem;
-
-        include /etc/letsencrypt/options-ssl-nginx.conf;
-        ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-
-        location / {
-            proxy_pass http://unix:/tmp/shortener.sock; 
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
+    location / {
+        proxy_pass http://unix:/tmp/shortener.sock; 
+        # ... (其他 proxy_set_header)
     }
     ```
-
-2.  **启用配置并重启 Nginx:**
-
+3.  **启用配置并重启 Nginx:**
     ```bash
-    sudo ln -s /etc/nginx/sites-available/xxx.com /etc/nginx/sites-enabled/
+    sudo ln -s /etc/nginx/sites-available/你的域名.conf /etc/nginx/sites-enabled/
     sudo nginx -t
     sudo systemctl reload nginx
     ```
@@ -170,18 +144,6 @@
 
 ## 🌍 使用方法
 
-  * **短链接访问:** `https://xxx.com/您的短码` (例如：`https://xxx.com/clash`)
-  * **管理后台:** `https://xxx.com/login`
-      * 使用初始管理员账户登录后，即可创建、编辑和删除短链接。
-      * **强烈建议** 登录后立即修改管理员密码。
-
------
-
-## 🛡️ 安全与维护
-
-1.  **修改初始密码:** 首次登录后，请通过 SQL 命令或实现页面功能来修改初始管理员密码。
-2.  **数据库备份:** 定期备份 `url_shortener_db` 数据库。
-3.  **Certbot 续期:** Certbot 应该已经配置自动续期，但请定期检查续期任务是否正常工作。
-
-## 联系开发者
-mailto: do@eiai.studio
+  * **管理后台:** `https://你的域名/login`
+  * **短链接访问:** `https://你的域名/您的短码`
+  * **初始管理员:** `admin` / `初始密码` (请在数据库中修改或登录后自行更新用户名和密码)。
