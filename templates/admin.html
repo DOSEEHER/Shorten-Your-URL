@@ -33,6 +33,7 @@
             <tr>
                 <th>短码</th>
                 <th>长链接</th>
+                <th>模式</th>
                 <th>备注</th>
                 <th>点击量</th>
                 <th>创建时间</th>
@@ -48,6 +49,13 @@
                     </a>
                 </td>
                 <td title="{{ link.original_url }}">{{ link.original_url[:50] }}...</td>
+                <td>
+                    {% if link.mode == 'redirect' %}
+                        跳转模式
+                    {% else %}
+                        代理模式
+                    {% endif %}
+                </td>
                 <td>{{ link.note }}</td>
                 <td>{{ link.clicks }}</td>
                 <td>{{ link.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
