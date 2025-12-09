@@ -1,5 +1,6 @@
 import random
 import string
+import requests
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -27,6 +28,7 @@ class Link(db.Model):
     note = db.Column(db.String(255), default='')
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
     clicks = db.Column(db.Integer, default=0)
+    mode = db.Column(db.String(10), default='redirect', nullable=False)
 
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
@@ -71,9 +73,30 @@ def redirect_to_url(short_code):
     link.clicks += 1
     db.session.commit()
     # 确保 URL 包含协议头
-    if not link.original_url.startswith(('http://', 'https://')):
-        return redirect('http://' + link.original_url, code=302)
-    return redirect(link.original_url, code=302)
+    original_url = link.original_url
+    if not original_url.startswith(('http://', 'https://')):
+        original_url = 'http://' + original_url
+
+    # --- 核心逻辑：根据模式判断执行代理还是重定向 ---
+    if link.mode == 'proxy':
+        # 执行代理模式
+        try:
+            # stream=True 是为了高效处理大文件
+            response = requests.get(original_url, stream=True)
+            
+            # 将原始响应头原样传回给客户端（注意：要去除 Content-Length 以防冲突）
+            headers = [(name, value) for name, value in response.headers.items() 
+                       if name.lower() not in ('content-encoding', 'content-length')]
+                       
+            return response.content, response.status_code, headers
+            
+        except requests.exceptions.RequestException as e:
+            app.logger.error(f"Error proxying URL {original_url}: {e}")
+            return "代理目标 URL 无法访问或连接错误。", 500
+    
+    else: # link.mode == 'redirect' 或其他任何值
+        # 执行重定向模式
+        return redirect(original_url, code=302)
 
 # --- 路由：登录 ---
 
@@ -124,6 +147,7 @@ def create_link():
     original_url = request.form.get('original_url')
     custom_code = request.form.get('custom_code')
     note = request.form.get('note', '')
+    mode = request.form.get('mode', 'redirect')
 
     if not original_url:
         flash('长链接不能为空。', 'danger')
@@ -141,7 +165,8 @@ def create_link():
     new_link = Link(
         original_url=original_url,
         short_code=short_code,
-        note=note
+        note=note,
+        mode=mode
     )
     db.session.add(new_link)
     db.session.commit()
