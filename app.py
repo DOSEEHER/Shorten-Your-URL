@@ -2,6 +2,8 @@ import random
 import string
 import requests
 import os
+import time
+from collections import defaultdict
 from flask import Flask, render_template, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -106,6 +108,34 @@ def redirect_to_url(short_code):
         # 执行重定向模式
         return redirect(original_url, code=302)
 
+# --- 登录安全防护：防暴破机制 ---
+# 记录每个 IP 的失败尝试时间戳，格式：{ ip: [timestamp1, timestamp2, ...] }
+FAILED_LOGIN_ATTEMPTS = defaultdict(list)
+BLOCK_DURATION = 300  # 限制时间 5 分钟
+MAX_FAILED_ATTEMPTS = 5 # 最大失败次数
+
+def get_client_ip():
+    # 优先从 Nginx 传入的 X-Forwarded-For 和 X-Real-IP 中获取真实 IP
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.headers.get('X-Real-IP', request.remote_addr)
+
+def check_ip_block(ip):
+    now = time.time()
+    # 清理已过期的失败记录（超过 5 分钟的）
+    FAILED_LOGIN_ATTEMPTS[ip] = [t for t in FAILED_LOGIN_ATTEMPTS[ip] if now - t < BLOCK_DURATION]
+    return len(FAILED_LOGIN_ATTEMPTS[ip]) >= MAX_FAILED_ATTEMPTS
+
+def record_failed_login(ip):
+    FAILED_LOGIN_ATTEMPTS[ip].append(time.time())
+    # 增加登录失败的防御性延迟，减缓暴力破解工具的速度
+    time.sleep(2.0)
+
+def clear_failed_login(ip):
+    if ip in FAILED_LOGIN_ATTEMPTS:
+        del FAILED_LOGIN_ATTEMPTS[ip]
+
 # --- 路由：登录 ---
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -113,15 +143,24 @@ def login():
     if current_user.is_authenticated:
         return redirect(url_for('admin_dashboard'))
 
+    ip = get_client_ip()
+
+    # 检查当前 IP 是否因为尝试失败次数过多而被暂时封禁
+    if check_ip_block(ip):
+        flash('由于登录失败次数过多，该 IP 已被临时锁定。请 5 分钟后再试。', 'danger')
+        return render_template('login.html'), 429
+
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
         user = User.query.filter_by(username=username).first()
 
         if user and user.check_password(password):
+            clear_failed_login(ip) # 登录成功，清除失败记录
             login_user(user)
             return redirect(url_for('admin_dashboard'))
         else:
+            record_failed_login(ip) # 记录失败并触发 2 秒延迟
             flash('用户名或密码错误。', 'danger')
 
     # 简单的登录表单，你需要在 templates/login.html 中实现它
@@ -219,6 +258,44 @@ def delete_link(short_code):
     db.session.commit()
     flash(f'短码 "{short_code}" 已被删除。', 'info')
     return redirect(url_for('admin_dashboard'))
+
+
+# --- 路由：修改账户信息 ---
+@app.route('/admin/profile', methods=['GET', 'POST'])
+@login_required
+def profile():
+    if request.method == 'POST':
+        current_password = request.form.get('current_password')
+        new_username = request.form.get('new_username')
+        new_password = request.form.get('new_password')
+        confirm_password = request.form.get('confirm_password')
+
+        # 验证当前密码是否正确
+        if not current_user.check_password(current_password):
+            flash('当前密码错误，无法保存更改。', 'danger')
+            return redirect(url_for('profile'))
+
+        # 如果修改用户名
+        if new_username and new_username != current_user.username:
+            # 检查用户名是否重复
+            existing_user = User.query.filter_by(username=new_username).first()
+            if existing_user and existing_user.id != current_user.id:
+                flash(f'用户名 "{new_username}" 已存在，请使用其他用户名。', 'danger')
+                return redirect(url_for('profile'))
+            current_user.username = new_username
+
+        # 如果修改密码
+        if new_password:
+            if new_password != confirm_password:
+                flash('两次输入的新密码不一致。', 'danger')
+                return redirect(url_for('profile'))
+            current_user.set_password(new_password)
+
+        db.session.commit()
+        flash('账户信息修改成功。', 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    return render_template('profile.html')
 
 
 # --- 初始化数据库和管理员账户 ---

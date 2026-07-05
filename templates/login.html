@@ -1,16 +1,31 @@
 {% extends "base.html" %}
 
-{% block title %}登录{% endblock %}
+{% block title %}管理员登录{% endblock %}
 
 {% block content %}
-    <h2>管理员登录</h2>
-    <form method="POST">
-        <label for="username">用户名:</label>
-        <input type="text" id="username" name="username" required><br><br>
-        
-        <label for="password">密码:</label>
-        <input type="password" id="password" name="password" required><br><br>
-        
-        <button type="submit">登录</button>
-    </form>
+<div style="display: flex; justify-content: center; align-items: center; min-height: 55vh; padding: 20px 0;">
+    <div class="glass-card" style="width: 100%; max-width: 380px; padding: 40px 30px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.05); border: 1px solid rgba(0, 0, 0, 0.06);">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <span style="font-size: 2.2rem; display: inline-block; margin-bottom: 10px;">🔐</span>
+            <h2 style="font-weight: 600; font-size: 1.4rem; color: var(--text-primary); letter-spacing: -0.5px;">管理员登录</h2>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">请输入您的凭证以访问管理面板</p>
+        </div>
+
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" name="username" placeholder="请输入用户名" required autocomplete="username">
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 30px;">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password" placeholder="请输入密码" required autocomplete="current-password">
+            </div>
+            
+            <button type="submit" class="btn-primary" style="width: 100%; padding: 12px; font-size: 0.95rem; border-radius: 24px;">
+                登录
+            </button>
+        </form>
+    </div>
+</div>
 {% endblock %}

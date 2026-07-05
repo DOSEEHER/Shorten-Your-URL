@@ -1,9 +1,45 @@
 {% extends "base.html" %}
 
-{% block title %}短链接服务{% endblock %}
+{% block title %}主页{% endblock %}
 
 {% block content %}
-    <h1>欢迎使用 istill.live 短链接服务!</h1>
-    <p>这是一个私有的短链接管理平台。</p>
-    <p><a href="{{ url_for('login') }}">点击此处登录</a></p>
+<div style="display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 65vh; text-align: center; padding: 40px 20px;">
+    <div style="margin-bottom: 20px; font-size: 4.5rem; animation: float 6s ease-in-out infinite;">
+        🔗
+    </div>
+    
+    <h1 style="font-size: 2.5rem; font-weight: 700; line-height: 1.15; margin-bottom: 20px; color: var(--text-primary); letter-spacing: -1px;">
+        istill.live 短链接服务
+    </h1>
+    
+    <p style="color: var(--text-secondary); font-size: 1.1rem; max-width: 580px; margin-bottom: 35px; line-height: 1.6; font-weight: 400;">
+        欢迎使用私有化部署的高性能短网址服务。本系统提供双模式链接缩短支持（重定向/反代），帮助您优雅、高效且私密地分享每一个长链接。
+    </p>
+    
+    <div>
+        {% if current_user.is_authenticated %}
+            <a href="{{ url_for('admin_dashboard') }}" class="btn-primary" style="padding: 12px 30px; font-size: 0.95rem; border-radius: 24px; font-weight: 500;">
+                管理面板
+            </a>
+        {% else %}
+            <a href="{{ url_for('login') }}" class="btn-primary" style="padding: 12px 30px; font-size: 0.95rem; border-radius: 24px; font-weight: 500;">
+                立即登录管理
+            </a>
+        {% endif %}
+    </div>
+</div>
+
+<style>
+@keyframes float {
+    0% {
+        transform: translateY(0px);
+    }
+    50% {
+        transform: translateY(-10px);
+    }
+    100% {
+        transform: translateY(0px);
+    }
+}
+</style>
 {% endblock %}

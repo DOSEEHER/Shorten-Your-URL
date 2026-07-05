@@ -3,38 +3,322 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}短链接管理{% endblock %}</title>
+    <title>{% block title %}短链接管理{% endblock %} | istill.live</title>
+    <!-- 引入高质感字体 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
-        /* 极简CSS，实际应用中请使用框架 */
-        body { font-family: sans-serif; margin: 20px; }
-        .container { max-width: 900px; margin: auto; }
-        .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
-        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .danger { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        nav { margin-bottom: 20px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        :root {
+            --bg-color: #f5f5f7;
+            --container-bg: #ffffff;
+            --card-bg: #ffffff;
+            --border-color: #d2d2d7;
+            --border-hover: #86868b;
+            --text-primary: #1d1d1f;
+            --text-secondary: #86868b;
+            --primary-color: #0071e3;
+            --primary-hover: #0077ed;
+            --success-color: #34c759;
+            --danger-color: #ff3b30;
+            --warning-color: #ff9500;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Icons", "Helvetica Neue", "Helvetica", "Arial", "Noto Sans SC", sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        /* Apple 风格半透明导航栏 */
+        header {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: saturate(180%) blur(20px);
+            -webkit-backdrop-filter: saturate(180%) blur(20px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .nav-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 14px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            letter-spacing: -0.5px;
+            transition: opacity 0.2s;
+        }
+
+        .logo:hover {
+            opacity: 0.7;
+        }
+
+        nav {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 0.85rem;
+        }
+
+        nav span.welcome {
+            color: var(--text-secondary);
+        }
+
+        nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: 20px;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+
+        nav a:hover {
+            color: var(--text-primary);
+        }
+
+        nav a.active {
+            color: var(--primary-color);
+        }
+
+        nav a.logout {
+            color: var(--danger-color);
+        }
+
+        nav a.logout:hover {
+            opacity: 0.8;
+        }
+
+        /* 浮动提示框 */
+        .flash-container {
+            margin-bottom: 25px;
+        }
+
+        .flash-message {
+            padding: 12px 18px;
+            margin-bottom: 12px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            font-weight: 500;
+            font-size: 0.9rem;
+            animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            border: 1px solid transparent;
+        }
+
+        .success {
+            background-color: rgba(52, 199, 89, 0.1);
+            color: #24b24b;
+            border-color: rgba(52, 199, 89, 0.15);
+        }
+
+        .danger {
+            background-color: rgba(255, 59, 48, 0.1);
+            color: #d6251b;
+            border-color: rgba(255, 59, 48, 0.15);
+        }
+
+        .info {
+            background-color: rgba(0, 113, 227, 0.1);
+            color: var(--primary-color);
+            border-color: rgba(0, 113, 227, 0.15);
+        }
+
+        /* Apple 风格圆角白色卡片 */
+        .glass-card {
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+            border: 1px solid rgba(0, 0, 0, 0.02);
+        }
+
+        /* 表单输入框 */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="url"],
+        select {
+            width: 100%;
+            padding: 12px 16px;
+            background: #f5f5f7;
+            border: 1px solid transparent;
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.95rem;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        input[type="text"]:focus,
+        input[type="password"]:focus,
+        input[type="url"]:focus,
+        select:focus {
+            outline: none;
+            background: #ffffff;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.15);
+        }
+
+        /* Apple 风格经典圆角胶囊按钮 */
+        button.btn-primary,
+        a.btn-primary {
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            background: var(--primary-color);
+            color: #fff;
+            border: none;
+            padding: 10px 22px;
+            border-radius: 30px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+
+        button.btn-primary:hover,
+        a.btn-primary:hover {
+            background: var(--primary-hover);
+        }
+
+        button.btn-primary:active,
+        a.btn-primary:active {
+            transform: scale(0.98);
+        }
+
+        /* 动画效果 */
+        @keyframes slideIn {
+            from {
+                transform: translateY(-8px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        /* 移动端导航栏适配 */
+        @media (max-width: 600px) {
+            .nav-container {
+                flex-direction: column;
+                gap: 12px;
+                padding: 12px 15px;
+            }
+            nav {
+                width: 100%;
+                justify-content: center;
+                gap: 8px;
+                font-size: 0.8rem;
+                flex-wrap: wrap; /* 支持折行防溢出 */
+            }
+            nav span.welcome {
+                display: none; /* 移动端隐藏欢迎语以节省空间 */
+            }
+            nav a {
+                padding: 5px 10px;
+            }
+        }
+
+        /* 页脚 */
+        footer {
+            text-align: center;
+            padding: 40px 0;
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            background: #f5f5f7;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+            margin-top: 60px;
+        }
+
+        footer a {
+            color: var(--text-secondary);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            color: var(--text-primary);
+            text-decoration: underline;
+        }
+
     </style>
 </head>
 <body>
+    <header>
+        <div class="nav-container">
+            <a href="/" class="logo">
+                🔗 iStill.Live
+            </a>
+            <nav>
+                {% if current_user.is_authenticated %}
+                    <span class="welcome">你好, {{ current_user.username }}</span>
+                    <a href="{{ url_for('admin_dashboard') }}" class="{% if request.path == url_for('admin_dashboard') %}active{% endif %}">管理面板</a>
+                    <a href="{{ url_for('profile') }}" class="{% if request.path == url_for('profile') %}active{% endif %}">安全设置</a>
+                    <a href="{{ url_for('logout') }}" class="logout">退出</a>
+                {% else %}
+                    <a href="{{ url_for('login') }}" class="{% if request.path == url_for('login') %}active{% endif %}">登录</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+
     <div class="container">
-        <nav>
-            {% if current_user.is_authenticated %}
-                <span>欢迎, {{ current_user.username }}!</span> |
-                <a href="{{ url_for('admin_dashboard') }}">管理面板</a> |
-                <a href="{{ url_for('logout') }}">退出登录</a>
-            {% endif %}
-        </nav>
-        
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% if messages %}
-            {% for category, message in messages %}
-              <div class="flash-message {{ category }}">{{ message }}</div>
-            {% endfor %}
-          {% endif %}
-        {% endwith %}
+        <div class="flash-container">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                {% for category, message in messages %}
+                  <div class="flash-message {{ category }}">{{ message }}</div>
+                {% endfor %}
+              {% endif %}
+            {% endwith %}
+        </div>
 
         {% block content %}{% endblock %}
     </div>
+
+    <footer>
+        <p>&copy; 2026 <a href="https://istill.live">istill.live</a>. All rights reserved.</p>
+    </footer>
 </body>
 </html>

@@ -1,81 +1,426 @@
 {% extends "base.html" %}
 
-{% block title %}链接管理面板{% endblock %}
+{% block title %}管理面板{% endblock %}
 
 {% block content %}
-    <h1>🔗短链接管理</h1>
+<style>
+    /* 单栏上下布局 */
+    .dashboard-layout {
+        display: flex;
+        flex-direction: column;
+        gap: 30px;
+    }
 
-    <h3>新建短链接</h3>
-    <form method="POST" action="{{ url_for('create_link') }}">
-        <label for="original_url">原始链接 (必填):</label>
-        <input type="url" id="original_url" name="original_url" size="60" required><br><br>
+    /* 模式说明框 */
+    .info-box {
+        background: #f5f5f7;
+        border-radius: 12px;
+        padding: 15px;
+        margin-top: 15px;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        border: 1px solid rgba(0, 0, 0, 0.03);
+    }
+    
+    .info-box p {
+        margin-bottom: 6px;
+    }
+    .info-box p:last-child {
+        margin-bottom: 0;
+    }
+
+    /* 表格样式 */
+    .table-container {
+        overflow-x: auto;
+        border-radius: 16px;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+        background: #ffffff;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        text-align: left;
+    }
+
+    th {
+        background: #f5f5f7;
+        padding: 14px 18px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        color: var(--text-secondary);
+        border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    td {
+        padding: 16px 18px;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        font-size: 0.9rem;
+        vertical-align: middle;
+        color: var(--text-primary);
+    }
+
+    tr:last-child td {
+        border-bottom: none;
+    }
+
+    tr:hover td {
+        background: #fafafa;
+    }
+
+    /* 徽章样式 */
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    .badge-redirect {
+        background: rgba(0, 113, 227, 0.08);
+        color: var(--primary-color);
+    }
+
+    .badge-proxy {
+        background: rgba(0, 0, 0, 0.05);
+        color: var(--text-primary);
+    }
+
+    /* 复制与短链接显示 */
+    .short-link-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .short-link-text {
+        color: var(--primary-color);
+        font-weight: 500;
+        text-decoration: none;
+        transition: opacity 0.2s;
+    }
+
+    .short-link-text:hover {
+        opacity: 0.8;
+        text-decoration: underline;
+    }
+
+    .copy-btn {
+        background: #f5f5f7;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+        color: var(--text-primary);
+        padding: 4px 8px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.75rem;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .copy-btn:hover {
+        background: #e8e8ed;
+    }
+
+    /* 管理操作按钮 */
+    .action-link {
+        color: var(--primary-color);
+        text-decoration: none;
+        font-weight: 500;
+        transition: opacity 0.2s;
+    }
+
+    .action-link:hover {
+        opacity: 0.8;
+    }
+
+    .btn-delete {
+        background: none;
+        border: none;
+        color: var(--danger-color);
+        font-weight: 500;
+        cursor: pointer;
+        font-family: inherit;
+        font-size: inherit;
+        transition: opacity 0.2s;
+    }
+
+    .btn-delete:hover {
+        opacity: 0.8;
+    }
+
+    /* 折叠面板动效 */
+    details.create-panel {
+        background: #ffffff;
+        border-radius: 20px;
+        border: 1px solid rgba(0, 0, 0, 0.08);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.02);
+        overflow: hidden;
+    }
+
+    details.create-panel summary {
+        padding: 20px 30px;
+        font-weight: 600;
+        font-size: 1.1rem;
+        cursor: pointer;
+        user-select: none;
+        outline: none;
+        color: var(--text-primary);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    /* 隐藏原生小三角 */
+    details.create-panel summary::-webkit-details-marker {
+        display: none;
+    }
+    details.create-panel summary::after {
+        content: "＋";
+        font-size: 1.2rem;
+        color: var(--text-secondary);
+        transition: transform 0.2s ease;
+    }
+
+    details.create-panel[open] summary::after {
+        content: "－";
+    }
+
+    .create-form-container {
+        padding: 10px 30px 30px 30px;
+        border-top: 1px solid rgba(0, 0, 0, 0.05);
+        animation: slideDown 0.3s ease-out;
+    }
+
+    @keyframes slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 🍎 原生并排表单布局（大屏幕上并排更精致） */
+    .form-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    
+    @media (min-width: 768px) {
+        .form-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+        .form-grid-full {
+            grid-column: span 2;
+        }
+    }
+
+    /* 📱 移动端表格转卡片列表 */
+    @media (max-width: 768px) {
+        /* 隐藏表格头部 */
+        table, thead, tbody, th, td, tr {
+            display: block;
+        }
         
-        <label for="custom_code">自定义短码 (可选):</label>
-        <input type="text" id="custom_code" name="custom_code" pattern="[a-zA-Z0-9_-]+" title="只能包含字母、数字、下划线和短横线"><br><br>
+        thead tr {
+            position: absolute;
+            top: -9999px;
+            left: -9999px;
+        }
         
-        <label for="note">备注 (可选):</label>
-        <input type="text" id="note" name="note" size="40"><br><br>
+        tr {
+            background: #ffffff;
+            border-bottom: 8px solid #f5f5f7; /* 间隔线 */
+            padding: 16px 20px;
+        }
 
-        <label for="mode">链接模式:</label>
-        <select id="mode" name="mode" required>
-            <option value="redirect">跳转模式</option>
-            <option value="proxy">代理模式</option>
-        </select><br>
-        <fieldset>
-            <legend>模式说明</legend>
-            🦘跳转模式：短链接将直接跳转到原始链接，优点是速度快，缺点是可能暴露原始链接。<br>
-            🐢代理模式：短链接通过服务器代理访问原始链接，优点是隐藏了原始链接，缺点是可能稍慢。<br>
-        </fieldset><br>
-        <button type="submit">➕创建链接</button>
-    </form>
+        tr:last-child {
+            border-bottom: none;
+        }
+        
+        td {
+            border: none;
+            border-bottom: 1px solid #f5f5f7;
+            position: relative;
+            padding: 12px 0 12px 35%;
+            text-align: right;
+            font-size: 0.85rem;
+            min-height: 45px;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+        }
+        
+        td:last-child {
+            border-bottom: none;
+        }
+        
+        td::before {
+            position: absolute;
+            left: 0;
+            width: 30%;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            content: attr(data-label);
+            font-size: 0.8rem;
+        }
 
-    <hr>
+        .short-link-wrapper {
+            justify-content: flex-end;
+            width: 100%;
+        }
 
-    <h3>现有链接列表 (共 {{ links|length }} 条)</h3>
-    <table>
-        <thead>
-            <tr>
-                <th>短码</th>
-                <th>长链接</th>
-                <th>模式</th>
-                <th>备注</th>
-                <th>点击量</th>
-                <th>创建时间</th>
-		<th>操作</th>
-                </tr>
-        </thead>
-        <tbody>
-            {% for link in links %}
-            <tr>
-                <td>
-                    <a href="https://istill.live/{{ link.short_code }}" target="_blank">
-                        {{ link.short_code }}
-                    </a>
-                </td>
-                <td title="{{ link.original_url }}">{{ link.original_url[:50] }}...</td>
-                <td>
-                    {% if link.mode == 'redirect' %}
-                        跳转模式
-                    {% else %}
-                        代理模式
-                    {% endif %}
-                </td>
-                <td>{{ link.note }}</td>
-                <td>{{ link.clicks }}</td>
-                <td>{{ link.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                <td>
-                <a href="{{ url_for('edit_link', short_code=link.short_code) }}">编辑</a>
+        .table-container {
+            border: none;
+            background: transparent;
+        }
+    }
+</style>
 
-                 |
-   
-                 <form method="POST" action="{{ url_for('delete_link', short_code=link.short_code) }}" style="display:inline;">
-                   <button type="submit" onclick="return confirm('确定要删除短码 {{ link.short_code }} 吗？这将无法恢复！');" style="color:red; background:none; border:none; cursor:pointer; padding:0;">
-                      删除
-                   </button>
-                 </form>
-                </td>
-                </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+<div style="margin-bottom: 30px;">
+    <h1 style="font-weight: 600; font-size: 1.8rem; color: var(--text-primary); letter-spacing: -0.5px;">链接管理</h1>
+    <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 4px;">创建、修改和分析您的所有私有短链接</p>
+</div>
+
+<div class="dashboard-layout">
+    <!-- 上方折叠面板：新建短链接 -->
+    <details class="create-panel" open>
+        <summary>新建短链接</summary>
+        <div class="create-form-container">
+            <form method="POST" action="{{ url_for('create_link') }}">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="original_url">原始长链接 (必填)</label>
+                        <input type="url" id="original_url" name="original_url" placeholder="https://example.com/very-long-url" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="custom_code">自定义短码 (可选)</label>
+                        <input type="text" id="custom_code" name="custom_code" placeholder="如: myblog" pattern="[a-zA-Z0-9_-]+" title="只能包含字母、数字、下划线和短横线">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="note">备注信息 (可选)</label>
+                        <input type="text" id="note" name="note" placeholder="用于标记此链接用途">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="mode">跳转模式</label>
+                        <select id="mode" name="mode" required>
+                            <option value="redirect" selected>🦘 跳转模式 (302 Redirect)</option>
+                            <option value="proxy">🐢 代理模式 (Backend Proxy)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-grid-full info-box">
+                        <p><strong>🦘 跳转模式：</strong>速度极快，使用 302 临时重定向跳转，但地址栏会暴露原始链接。</p>
+                        <p><strong>🐢 代理模式：</strong>地址栏保持短网址不变，内容由服务器在后台抓取并呈现，彻底隐藏原始网址。</p>
+                    </div>
+                </div>
+
+                <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+                    <button type="submit" class="btn-primary" style="padding: 10px 30px;">
+                        生成短链接
+                    </button>
+                </div>
+            </form>
+        </div>
+    </details>
+
+    <!-- 下方：链接列表 -->
+    <div class="glass-card" style="padding: 0;">
+        <div style="padding: 24px 30px; border-bottom: 1px solid rgba(0, 0, 0, 0.05); display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="font-weight: 600; font-size: 1.1rem; color: var(--text-primary);">现有链接列表</h3>
+            <span style="font-size: 0.75rem; color: var(--text-secondary); background: #f5f5f7; padding: 4px 10px; border-radius: 12px; font-weight: 500;">
+                共 {{ links|length }} 条
+            </span>
+        </div>
+
+        {% if links|length == 0 %}
+            <div style="text-align: center; padding: 60px 20px; color: var(--text-secondary);">
+                <span style="font-size: 2.5rem; display: block; margin-bottom: 10px;">🫙</span>
+                暂无短链接数据，在上方创建一个吧！
+            </div>
+        {% else %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>短链接</th>
+                            <th>原始长链接</th>
+                            <th>模式</th>
+                            <th>备注</th>
+                            <th>点击</th>
+                            <th style="text-align: right;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for link in links %}
+                        <tr>
+                            <td data-label="短链接">
+                                <div class="short-link-wrapper">
+                                    <a href="https://istill.live/{{ link.short_code }}" class="short-link-text" target="_blank">
+                                        {{ link.short_code }}
+                                    </a>
+                                    <button class="copy-btn" onclick="copyLink('https://istill.live/{{ link.short_code }}', this)">复制</button>
+                                </div>
+                            </td>
+                            <td data-label="长链接">
+                                <div style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary);" title="{{ link.original_url }}">
+                                    {{ link.original_url }}
+                                </div>
+                            </td>
+                            <td data-label="模式">
+                                {% if link.mode == 'redirect' %}
+                                    <span class="badge badge-redirect">跳转</span>
+                                {% else %}
+                                    <span class="badge badge-proxy">代理</span>
+                                {% endif %}
+                            </td>
+                            <td data-label="备注">
+                                <span style="color: var(--text-secondary);">{{ link.note or '-' }}</span>
+                            </td>
+                            <td data-label="点击">
+                                <strong style="color: var(--text-primary); font-weight: 600;">{{ link.clicks }}</strong>
+                            </td>
+                            <td data-label="操作" style="text-align: right;">
+                                <div style="display: inline-flex; gap: 12px; align-items: center;">
+                                    <a href="{{ url_for('edit_link', short_code=link.short_code) }}" class="action-link">编辑</a>
+                                    <span style="color: rgba(0, 0, 0, 0.1);">|</span>
+                                    <form method="POST" action="{{ url_for('delete_link', short_code=link.short_code) }}" style="display:inline;">
+                                        <button type="submit" class="btn-delete" onclick="return confirm('确定要删除短码 {{ link.short_code }} 吗？');">
+                                            删除
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function copyLink(text, button) {
+    navigator.clipboard.writeText(text).then(function() {
+        var originalText = button.innerText;
+        button.innerText = '已复制!';
+        button.style.backgroundColor = 'rgba(52, 199, 89, 0.15)';
+        button.style.color = '#24b24b';
+        button.style.borderColor = 'rgba(52, 199, 89, 0.2)';
+        setTimeout(function() {
+            button.innerText = originalText;
+            button.style.backgroundColor = '';
+            button.style.color = '';
+            button.style.borderColor = '';
+        }, 1500);
+    }, function(err) {
+        console.error('无法复制链接: ', err);
+    });
+}
+</script>
 {% endblock %}

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}安全设置{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: center; align-items: center; min-height: 60vh; padding: 20px 0;">
+    <div class="glass-card" style="width: 100%; max-width: 480px; padding: 40px 30px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); border: 1px solid rgba(0, 0, 0, 0.06);">
+        <div style="margin-bottom: 30px; border-bottom: 1px solid rgba(0, 0, 0, 0.05); padding-bottom: 20px;">
+            <h2 style="font-weight: 600; font-size: 1.4rem; color: var(--text-primary); letter-spacing: -0.5px;">👤 安全设置</h2>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">修改您的管理员登录账户及密码</p>
+        </div>
+
+        <form method="POST" action="{{ url_for('profile') }}">
+            <div class="form-group">
+                <label for="new_username">新用户名</label>
+                <input type="text" id="new_username" name="new_username" value="{{ current_user.username }}" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="new_password">新密码 (如不修改请留空)</label>
+                <input type="password" id="new_password" name="new_password" placeholder="请输入新密码">
+            </div>
+            
+            <div class="form-group">
+                <label for="confirm_password">确认新密码</label>
+                <input type="password" id="confirm_password" name="confirm_password" placeholder="请再次输入新密码">
+            </div>
+            
+            <div style="margin: 25px 0 20px 0; background-color: rgba(255, 149, 0, 0.08); color: #bf7300; padding: 12px 16px; border-radius: 10px; font-size: 0.8rem; line-height: 1.5; display: flex; align-items: flex-start; gap: 8px;">
+                <span style="font-size: 1.1rem; line-height: 1;">⚠️</span>
+                <span>为了您的账户安全，保存任何更改均需要输入当前正在使用的密码进行身份确认。</span>
+            </div>
+            
+            <div class="form-group" style="margin-bottom: 30px;">
+                <label for="current_password" style="color: #bf7300;">当前验证密码 (必填)</label>
+                <input type="password" id="current_password" name="current_password" required placeholder="请输入当前密码以授权更改" style="background: rgba(255, 149, 0, 0.02); border-color: rgba(255, 149, 0, 0.2);">
+            </div>
+            
+            <div style="display: flex; gap: 15px; align-items: center; justify-content: flex-end;">
+                <a href="{{ url_for('admin_dashboard') }}" style="color: var(--text-primary); text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 10px 20px; border-radius: 20px; background: #f5f5f7; text-align: center; transition: all 0.2s;" onmouseover="this.style.background='#e8e8ed'" onmouseout="this.style.background='#f5f5f7'">
+                    取消
+                </a>
+                <button type="submit" class="btn-primary" style="padding: 10px 24px; border-radius: 20px;">
+                    保存更改
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
