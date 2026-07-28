@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}账号管理{% endblock %}
+{% block content %}
+<div style="margin-bottom: 30px;">
+    <h1 style="font-size: 1.8rem;">账号管理</h1>
+    <p style="color: var(--text-secondary); margin-top: 6px;">仅管理员可以创建账号；每个账号只能管理自己创建的短链接。</p>
+</div>
+<div class="glass-card" style="margin-bottom: 28px;">
+    <h2 style="font-size: 1.15rem; margin-bottom: 20px;">创建账号</h2>
+    <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div style="display:grid; grid-template-columns:1fr 1fr auto; gap:16px; align-items:end;">
+            <div class="form-group" style="margin:0"><label for="username">用户名</label><input id="username" name="username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" required autocomplete="off"></div>
+            <div class="form-group" style="margin:0"><label for="password">初始密码</label><input id="password" name="password" type="password" minlength="12" required autocomplete="new-password"></div>
+            <button class="btn-primary" type="submit" style="height:44px">创建</button>
+        </div>
+        <p style="font-size:.8rem;color:var(--text-secondary);margin-top:12px">至少 12 位，且包含大小写字母、数字、特殊字符中的至少三类。</p>
+    </form>
+</div>
+<div class="glass-card">
+    <h2 style="font-size: 1.15rem; margin-bottom: 20px;">现有账号</h2>
+    {% for user in users %}
+    <div style="padding:18px 0; border-bottom:1px solid #eee; display:grid; grid-template-columns:minmax(120px,1fr) auto minmax(250px,1.5fr); gap:18px; align-items:center;">
+        <div><strong>{{ user.username }}</strong><div style="font-size:.78rem;color:var(--text-secondary)">{{ '管理员' if user.is_admin else '普通账号' }} · {{ user.links|length }} 条链接</div></div>
+        <div><span style="color:{{ '#24b24b' if user.enabled else '#d6251b' }}">{{ '已启用' if user.enabled else '已停用' }}</span>{% if not user.is_admin %}<form method="POST" action="{{ url_for('toggle_user', user_id=user.id) }}" style="display:inline;margin-left:8px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">{{ '停用' if user.enabled else '启用' }}</button></form>{% endif %}</div>
+        <form method="POST" action="{{ url_for('reset_user_password', user_id=user.id) }}" style="display:flex;gap:8px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="password" name="password" minlength="12" placeholder="设置新密码" required autocomplete="new-password"><button type="submit">重置</button></form>
+    </div>
+    {% endfor %}
+</div>
+<style>@media(max-width:700px){.glass-card form>div{grid-template-columns:1fr!important}.glass-card>div{grid-template-columns:1fr!important}}</style>
+{% endblock %}

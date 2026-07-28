@@ -1,28 +1,14 @@
-# Use an official Python runtime as a parent image
-FROM python:3.10-slim
-
-# Set the working directory in the container
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 DATA_DIR=/data
 WORKDIR /app
-
-# Install system dependencies for mysqlclient if needed, 
-# but the app uses pymysql so we just need basic build tools if any
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy the requirements file first to leverage Docker cache
-# Since there is no requirements.txt, we will create one
-RUN echo "Flask\nFlask-SQLAlchemy\nFlask-Login\nPyMySQL\nrequests\ngunicorn\nwerkzeug" > requirements.txt
-
-# Install any needed packages specified in requirements.txt
+RUN addgroup --system --gid 10001 app && adduser --system --uid 10001 --ingroup app app
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of the application code
-COPY . .
-
-# Expose the port the app runs on
+COPY app.py docker-entrypoint.sh ./
+COPY templates ./templates
+RUN mkdir -p /data && chown -R app:app /app /data && chmod +x /app/docker-entrypoint.sh
+USER app
 EXPOSE 5000
-
-# Run the initialization and then start gunicorn
-# Note: In a real production environment, you might want a separate init step
-CMD ["sh", "-c", "python -c 'from app import init_db_and_admin; init_db_and_admin()' && gunicorn --bind 0.0.0.0:5000 app:app"]
+VOLUME ["/data"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -109,11 +109,15 @@
             color: var(--primary-color);
         }
 
-        nav a.logout {
+        nav form { display: inline; }
+
+        nav button.logout { background: none; border: 0; font: inherit; cursor: pointer; padding: 6px 12px; }
+
+        nav a.logout, nav button.logout {
             color: var(--danger-color);
         }
 
-        nav a.logout:hover {
+        nav a.logout:hover, nav button.logout:hover {
             opacity: 0.8;
         }
 
@@ -295,7 +299,8 @@
                     <span class="welcome">你好, {{ current_user.username }}</span>
                     <a href="{{ url_for('admin_dashboard') }}" class="{% if request.path == url_for('admin_dashboard') %}active{% endif %}">管理面板</a>
                     <a href="{{ url_for('profile') }}" class="{% if request.path == url_for('profile') %}active{% endif %}">安全设置</a>
-                    <a href="{{ url_for('logout') }}" class="logout">退出</a>
+                    {% if current_user.is_admin %}<a href="{{ url_for('manage_users') }}" class="{% if request.path == url_for('manage_users') %}active{% endif %}">账号管理</a>{% endif %}
+                    <form method="POST" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="logout">退出</button></form>
                 {% else %}
                     <a href="{{ url_for('login') }}" class="{% if request.path == url_for('login') %}active{% endif %}">登录</a>
                 {% endif %}

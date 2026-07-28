@@ -1,151 +1,122 @@
-# 🔗 Shorten Your URL / URL Shortener (可私有化部署的短链接服务)
+# Shorten Your URL
 
-<img width="2181" height="1826" alt="image" src="https://github.com/user-attachments/assets/d6e486b7-3c07-4b97-8ecb-b2e9a7f93761" />
+一个可私有化部署的多账号短链接服务。默认使用容器内置 SQLite，不依赖 MySQL 等外部服务。
 
-## 简介
+## 功能
 
-本项目是一个功能完备的、基于 **Python Flask** 搭建的短链接服务（URL Shortener）。它支持将任意长链接转换为简短、易于分享的短码，并提供安全的管理员登录界面进行全面的链接管理。
+- Docker Compose 一条命令启动，数据库与应用密钥持久化在 Docker Volume 中
+- 管理员创建/停用其他账号（不提供公开注册）
+- 短链接按创建账号严格隔离；账号只能查看、编辑、删除自己的链接
+- scrypt 密码哈希、密码复杂度检查、账号指数锁定、IP 持久化限流
+- CSRF 防护、安全响应头、会话版本失效、可信代理显式配置
+- 跳转模式默认启用；高风险代理模式默认关闭，并带内网地址、超时和响应大小限制
+- 非 root、只读文件系统、移除 Linux capabilities 的最小权限容器
 
-### 🚀 核心功能与亮点
+## 快速部署
 
-  * **双模式支持:** 支持 **跳转模式 (Redirect)** 和 **代理模式 (Proxying)**，用户在创建链接时可自行选择，以兼顾速度和隐私。
-      * **跳转模式:** 使用 302 状态码，跳转速度快，但目标 URL 在网络请求中可见。
-      * **代理模式:** 地址栏保持短链接不变，内容由后端获取并返回，可**彻底隐藏原始长链接**，适用于配置或静态文件共享。
-  * **完整的管理功能:** 支持新建链接、自定义短码、**编辑链接属性**、**删除链接** 和查看点击量。
-  * **安全部署:** 使用 **Systemd Environment** 变量安全地隔离数据库凭证和应用密钥。
+服务器只需安装 Docker Engine 与 Docker Compose 插件：
 
-### ⚙️ 技术栈
+```bash
+git clone <你的仓库地址> shorten-your-url
+cd shorten-your-url
+cp .env.example .env
+```
 
-  * **后端:** Python 3.x, Flask, Flask-SQLAlchemy, Flask-Login, Requests
-  * **数据库:** MySQL
-  * **Web 服务器:** Gunicorn (WSGI) + Nginx (反向代理)
-  * **部署环境:** Ubuntu 22.04 LTS
+编辑 `.env`，至少将 `ADMIN_PASSWORD` 改为安全密码，然后启动：
 
------
+```bash
+docker compose up -d --build
+```
 
-## 🛠️ 快速部署指南
+访问 `http://服务器IP:5000/login`，使用 `.env` 中的 `ADMIN_USERNAME` / `ADMIN_PASSWORD` 登录。初始密码只在数据库为空的第一次启动时使用，后续修改 `.env` 不会覆盖已有管理员密码。
 
-本指南侧重于使用 **Git** 和 **Systemd** 进行安全部署和更新。
+检查运行状态：
 
-### 步骤一：环境准备与依赖安装
+```bash
+docker compose ps
+docker compose logs -f shortener
+```
 
-1.  **克隆或同步项目到 VPS:**
+停止服务不会删除数据：
 
-    ```bash
-    git clone [您的 GitHub 仓库地址] Shorten-Your-URL
-    cd Shorten-Your-URL
-    ```
+```bash
+docker compose down
+```
 
-2.  **创建并激活虚拟环境:**
+> 不要执行 `docker compose down -v`，除非确认要永久删除数据库和应用密钥。
 
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
+## HTTPS 反向代理
 
-3.  **安装所有依赖:**
+生产环境建议由 Caddy、Nginx 或 Traefik 提供 HTTPS。代理到 `127.0.0.1:5000` 时，建议在 `.env` 中设置：
 
-    ```bash
-    pip install Flask Flask-SQLAlchemy PyMySQL Flask-Login Gunicorn cryptography requests
-    ```
+```dotenv
+BIND_ADDRESS=127.0.0.1
+PUBLIC_BASE_URL=https://s.example.com
+COOKIE_SECURE=true
+TRUST_PROXY_COUNT=1
+TRUSTED_HOSTS=s.example.com
+```
 
-### 步骤二：数据库配置 (MySQL)
+只将 `TRUST_PROXY_COUNT` 设置为实际可信代理层数。应用不会在未配置时信任客户端伪造的 `X-Forwarded-For`。
 
-1.  **登录 MySQL** (以 root 用户为例):
+## 账号管理与隔离
 
-    ```bash
-    sudo mysql
-    ```
+首次启动创建的账号是管理员。登录后进入“账号管理”创建普通账号、停用账号或重置密码。系统没有 `/register` 路由。
 
-2.  **创建数据库和用户:**
+链接的所有管理查询都同时检查 `owner_id`。管理员也只能在链接面板管理自己创建的链接；管理员权限只额外提供账号管理能力。
 
-    ```sql
-    -- 替换 'shortener_user' 和 'YOUR_DB_PASSWORD'
-    CREATE DATABASE url_shortener_db;
-    CREATE USER 'shortener_user'@'localhost' IDENTIFIED BY 'YOUR_DB_PASSWORD';
-    GRANT ALL PRIVILEGES ON url_shortener_db.* TO 'shortener_user'@'localhost';
-    FLUSH PRIVILEGES;
-    EXIT;
-    ```
+## 登录安全策略
 
-    ⚠️ **重要：** 请记录 `YOUR_DB_PASSWORD`，用于下一步配置。
+- 密码至少 12 位，且包含大小写字母、数字、特殊字符中的至少三类
+- 密码使用 Werkzeug scrypt 哈希，不保存或记录明文密码
+- 单账号连续失败 5 次后锁定 15 分钟，继续失败按指数延长，最长 4 小时
+- 单 IP 15 分钟内失败 20 次后限流；记录位于 SQLite，多 Worker 与容器重启后仍生效
+- 不存在的用户名也执行同等成本密码计算，并使用统一错误信息，降低账号枚举风险
+- 管理员停用账号或重置密码后，该账号现存会话立即失效
 
-3.  **初始化数据库表结构和管理员账户:**
+## 数据与备份
 
-    ```bash
-    # 确保 app.py 中的 DB_USER, DB_NAME 设置正确（如果代码中有 default 值，此步应成功）
-    python app.py
-    # 记下终端输出的初始管理员用户名和密码 (如：admin/123456)。完成后 Ctrl + C 停止。
-    ```
+SQLite 数据库和自动生成的会话密钥位于 `shortener_data` Volume。在线备份建议使用 SQLite 的备份命令：
 
-### 步骤三：Systemd 安全配置（环境变量）
+```bash
+docker compose exec shortener python -c "import sqlite3; s=sqlite3.connect('/data/shortener.db'); d=sqlite3.connect('/data/backup.db'); s.backup(d); d.close(); s.close()"
+docker cp $(docker compose ps -q shortener):/data/backup.db ./shortener-backup.db
+```
 
-我们通过 Systemd 设置环境变量来隔离敏感信息。
+恢复前请先停止容器，并同时保留 `/data/.secret_key`；更换密钥会使现有登录会话失效。
 
-1.  **创建服务文件** (`/etc/systemd/system/url_shortener.service`):
+## 环境变量
 
-    ```bash
-    sudo nano /etc/systemd/system/url_shortener.service
-    ```
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `ADMIN_USERNAME` | `admin` | 首次启动的管理员用户名 |
+| `ADMIN_PASSWORD` | 无 | 首次启动必填的强密码 |
+| `PORT` | `5000` | 宿主机监听端口 |
+| `BIND_ADDRESS` | `0.0.0.0` | 宿主机绑定地址 |
+| `PUBLIC_BASE_URL` | 自动识别 | 对外短链接根地址 |
+| `COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
+| `TRUST_PROXY_COUNT` | `0` | 可信反向代理层数 |
+| `TRUSTED_HOSTS` | 空 | 允许的 Host，多个值用逗号分隔 |
+| `ENABLE_PROXY` | `false` | 是否开启代理模式 |
+| `WEB_WORKERS` | `2` | Gunicorn Worker 数量 |
+| `SECRET_KEY` | 自动生成 | 可选；若设置需至少 32 字符 |
 
-    粘贴以下内容（请替换 **路径** 和 **敏感变量**）：
+## 本地开发
 
-    ```ini
-    [Unit]
-    Description=Gunicorn instance for shortener
-    After=network.target
+```bash
+python -m venv .venv
+. .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+ADMIN_PASSWORD='Local-Test_2026!' python app.py
+```
 
-    [Service]
-    User=root  #如果出现权限提示，可尝试注释掉本行
-    Group=root  #如果出现权限提示，可尝试注释掉本行
-    WorkingDirectory=/root/Shorten-Your-URL
+Windows PowerShell：
 
-    # 🚨 关键：在此处设置您的数据库密码和应用密钥
-    Environment="DB_PASS=YOUR_DB_PASSWORD"
-    Environment="SECRET_KEY=YOUR_APPLICATION_SECRET_KEY" 
-    Environment="DB_USER=shortener_user"
-    Environment="DB_NAME=url_shortener_db"
+```powershell
+$env:ADMIN_PASSWORD='Local-Test_2026!'
+python app.py
+```
 
-    # 执行启动前，自动检查并安装依赖（增强稳定性）
-    ExecStartPre=/usr/bin/python3 -m venv venv || true
-    ExecStart=/root/Shorten-Your-URL/venv/bin/gunicorn --workers 3 --bind unix:/tmp/shortener.sock app:app
+## 从旧版升级
 
-    [Install]
-    WantedBy=multi-user.target
-    ```
-
-2.  **启动服务:**
-
-    ```bash
-    sudo systemctl daemon-reload
-    sudo systemctl start url_shortener
-    sudo systemctl enable url_shortener
-    sudo systemctl status url_shortener
-    ```
-
-    确认服务状态为 `active (running)`。
-
-### 步骤四：Nginx 配置和 SSL
-
-1.  **确保 Nginx 配置** (`/etc/nginx/sites-available/你的域名.conf`) 已包含 Certbot 证书路径和 HTTP 到 HTTPS 的重定向。
-2.  **确保 `location /` 块将流量转发到 Unix Socket:**
-    ```nginx
-    location / {
-        proxy_pass http://unix:/tmp/shortener.sock; 
-        # ... (其他 proxy_set_header)
-    }
-    ```
-3.  **启用配置并重启 Nginx:**
-    ```bash
-    sudo ln -s /etc/nginx/sites-available/你的域名.conf /etc/nginx/sites-enabled/
-    sudo nginx -t
-    sudo systemctl reload nginx
-    ```
-
------
-
-## 🌍 使用方法
-
-  * **管理后台:** `https://你的域名/login`
-  * **短链接访问:** `https://你的域名/您的短码`
-  * **初始管理员:** `admin` / `初始密码` (请在数据库中修改或登录后自行更新用户名和密码)。
+本版本的数据模型增加了账号归属字段，并由 MySQL 改为 SQLite，因此不会自动读取旧版 MySQL 数据。已有生产数据应先备份 MySQL，再编写一次性迁移或人工导入；不要直接销毁原数据库。全新服务器部署无需外部数据库。

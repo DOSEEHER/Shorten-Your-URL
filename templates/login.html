@@ -1,17 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}管理员登录{% endblock %}
+{% block title %}账号登录{% endblock %}
 
 {% block content %}
 <div style="display: flex; justify-content: center; align-items: center; min-height: 55vh; padding: 20px 0;">
     <div class="glass-card" style="width: 100%; max-width: 380px; padding: 40px 30px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.05); border: 1px solid rgba(0, 0, 0, 0.06);">
         <div style="text-align: center; margin-bottom: 30px;">
             <span style="font-size: 2.2rem; display: inline-block; margin-bottom: 10px;">🔐</span>
-            <h2 style="font-weight: 600; font-size: 1.4rem; color: var(--text-primary); letter-spacing: -0.5px;">管理员登录</h2>
-            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">请输入您的凭证以访问管理面板</p>
+            <h2 style="font-weight: 600; font-size: 1.4rem; color: var(--text-primary); letter-spacing: -0.5px;">账号登录</h2>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">请输入您的凭证以访问您的管理面板</p>
         </div>
 
         <form method="POST" action="{{ url_for('login') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
                 <label for="username">用户名</label>
                 <input type="text" id="username" name="username" placeholder="请输入用户名" required autocomplete="username">

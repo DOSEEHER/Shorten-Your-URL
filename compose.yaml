@@ -1,0 +1,28 @@
+services:
+  shortener:
+    build: .
+    image: shorten-your-url:local
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${PORT:-5000}:5000"
+    environment:
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?请在 .env 中设置强 ADMIN_PASSWORD}"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      TRUST_PROXY_COUNT: "${TRUST_PROXY_COUNT:-0}"
+      TRUSTED_HOSTS: "${TRUSTED_HOSTS:-}"
+      ENABLE_PROXY: "${ENABLE_PROXY:-false}"
+      WEB_WORKERS: "${WEB_WORKERS:-2}"
+    volumes:
+      - shortener_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  shortener_data:

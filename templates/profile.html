@@ -7,17 +7,18 @@
     <div class="glass-card" style="width: 100%; max-width: 480px; padding: 40px 30px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); border: 1px solid rgba(0, 0, 0, 0.06);">
         <div style="margin-bottom: 30px; border-bottom: 1px solid rgba(0, 0, 0, 0.05); padding-bottom: 20px;">
             <h2 style="font-weight: 600; font-size: 1.4rem; color: var(--text-primary); letter-spacing: -0.5px;">👤 安全设置</h2>
-            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">修改您的管理员登录账户及密码</p>
+            <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 5px;">修改您的登录用户名及密码</p>
         </div>
 
         <form method="POST" action="{{ url_for('profile') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
                 <label for="new_username">新用户名</label>
                 <input type="text" id="new_username" name="new_username" value="{{ current_user.username }}" required>
             </div>
             
             <div class="form-group">
-                <label for="new_password">新密码 (如不修改请留空)</label>
+                <label for="new_password">新密码（至少 12 位；不修改请留空）</label>
                 <input type="password" id="new_password" name="new_password" placeholder="请输入新密码">
             </div>
             
