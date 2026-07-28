@@ -173,7 +173,7 @@ def record_attempt(ip_hash, succeeded):
 
 COMMON_PASSWORDS = {'123456', '12345678', '123456789', 'password', 'password123', 'qwerty123', 'admin123', 'letmein', 'welcome', 'iloveyou'}
 USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9_.-]{3,64}$')
-SHORT_CODE_PATTERN = re.compile(r'^[A-Za-z0-9_-]{3,50}$')
+SHORT_CODE_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,50}$')
 
 
 def password_error(password, username=''):
@@ -326,7 +326,7 @@ def create_link():
     if not target:
         flash('请输入有效的 HTTP/HTTPS 链接，且链接中不能包含账号凭证。', 'danger')
     elif code and not SHORT_CODE_PATTERN.fullmatch(code):
-        flash('短码需为 3-50 位字母、数字、下划线或短横线。', 'danger')
+        flash('短码需为 1-50 位字母、数字、下划线或短横线。', 'danger')
     elif code and Link.query.filter_by(short_code=code).first():
         flash(f'短码 “{code}” 已被占用。', 'danger')
     else:
