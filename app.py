@@ -252,6 +252,10 @@ def redirect_to_url(short_code):
         abort(403)
     try:
         response = requests.get(target, timeout=(3.05, 15), allow_redirects=False, stream=True, headers={'User-Agent': 'ShortenYourURL/1.0'})
+
+        if response.is_redirect:
+            return redirect(response.headers['Location'], 302)
+
         content = bytearray()
         for chunk in response.iter_content(64 * 1024):
             content.extend(chunk)
