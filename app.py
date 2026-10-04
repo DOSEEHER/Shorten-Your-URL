@@ -2,7 +2,7 @@ import hashlib, hmac, ipaddress, os, re, secrets, socket
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 import requests
 from flask import Flask, abort, flash, redirect, render_template, request, url_for
 from flask_login import LoginManager, UserMixin, current_user, login_required, login_user, logout_user
@@ -251,20 +251,42 @@ def redirect_to_url(short_code):
     if not env_bool('ENABLE_PROXY') or not public_proxy_target(target):
         abort(403)
     try:
-        response = requests.get(target, timeout=(3.05, 15), allow_redirects=False, stream=True, headers={'User-Agent': 'ShortenYourURL/1.0'})
+        with requests.Session() as session:
+            current_url = target
+            response = None
+            for _ in range(10):
+                parsed = urlparse(current_url)
+                if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
+                    abort(400)
+                if not public_proxy_target(current_url):
+                    abort(403)
+                resp = session.get(current_url, timeout=(3.05, 15), allow_redirects=False, stream=True, headers={'User-Agent': 'ShortenYourURL/1.0'})
+                if resp.is_redirect:
+                    location = resp.headers.get('Location')
+                    if not location:
+                        response = resp
+                        break
+                    current_url = urljoin(current_url, location)
+                    resp.close()
+                    continue
+                response = resp
+                break
+            else:
+                abort(502)
 
-        if response.is_redirect:
-            return redirect(response.headers['Location'], 302)
+            if response is None:
+                abort(502)
 
-        content = bytearray()
-        for chunk in response.iter_content(64 * 1024):
-            content.extend(chunk)
-            if len(content) > 10 * 1024 * 1024:
-                response.close()
-                abort(413)
-        headers = {k: v for k, v in response.headers.items() if k.lower() in {'content-type', 'cache-control', 'last-modified', 'etag'}}
-        response.close()
-        return bytes(content), response.status_code, headers
+            content = bytearray()
+            for chunk in response.iter_content(64 * 1024):
+                content.extend(chunk)
+                if len(content) > 10 * 1024 * 1024:
+                    response.close()
+                    abort(413)
+            headers = {k: v for k, v in response.headers.items() if k.lower() in {'content-type', 'content-disposition', 'cache-control', 'last-modified', 'etag'}}
+            status_code = response.status_code
+            response.close()
+            return bytes(content), status_code, headers
     except requests.RequestException:
         app.logger.exception('代理目标访问失败')
         abort(502)
