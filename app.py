@@ -1,10 +1,21 @@
-import hashlib, hmac, ipaddress, os, re, secrets, socket
+import hashlib, hmac, os, re, secrets
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 import requests
 from flask import Flask, abort, flash, redirect, render_template, request, url_for
+from proxy import (
+    PROXY_COOKIE_NAME,
+    PROXY_CSP,
+    PROXY_METHODS,
+    execute_proxy_request,
+    extract_raw_subpath_and_query,
+    extract_referer_short_code,
+    has_valid_proxy_context,
+    is_public_proxy_target,
+    parse_proxy_cookie,
+)
 from flask_login import LoginManager, UserMixin, current_user, login_required, login_user, logout_user
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import CSRFProtect
@@ -139,9 +150,32 @@ def load_user(session_id):
     return user if user and user.enabled and user.auth_version == version else None
 
 
+@app.before_request
+def isolate_internal_routes():
+    path = request.path
+    if path in {'/login', '/logout'} or path == '/admin' or path.startswith('/admin/'):
+        sec_dest = request.headers.get('Sec-Fetch-Dest')
+        if sec_dest and sec_dest != 'document':
+            abort(403)
+        if request.method != 'GET':
+            ref_code = extract_referer_short_code(SHORT_CODE_PATTERN)
+            if ref_code and (
+                '/_p/' in (request.headers.get('Referer') or '')
+                or Link.query.filter_by(short_code=ref_code, mode='proxy').first()
+            ):
+                abort(403)
+
+
 @app.after_request
 def security_headers(response):
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    if getattr(response, '_is_proxied', False):
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
+        response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+        response.headers.setdefault('Content-Security-Policy', PROXY_CSP)
+        if request.is_secure:
+            response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+        return response
     response.headers.setdefault('X-Frame-Options', 'DENY')
     response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
     response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
@@ -174,6 +208,7 @@ def record_attempt(ip_hash, succeeded):
 COMMON_PASSWORDS = {'123456', '12345678', '123456789', 'password', 'password123', 'qwerty123', 'admin123', 'letmein', 'welcome', 'iloveyou'}
 USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9_.-]{3,64}$')
 SHORT_CODE_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,50}$')
+RESERVED_SHORT_CODES = {'login', 'logout', 'admin', 'healthz', 'register', '_p', '_px'}
 
 
 def password_error(password, username=''):
@@ -192,18 +227,14 @@ def normalized_url(value):
 
 
 def public_proxy_target(url):
-    try:
-        addresses = socket.getaddrinfo(urlparse(url).hostname, None)
-        return all(ipaddress.ip_address(address[4][0]).is_global for address in addresses)
-    except (socket.gaierror, ValueError):
-        return False
+    return is_public_proxy_target(url)
 
 
 def unique_code(length=7):
     alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
     while True:
         code = ''.join(secrets.choice(alphabet) for _ in range(length))
-        if not Link.query.filter_by(short_code=code).first():
+        if code.lower() not in RESERVED_SHORT_CODES and not Link.query.filter_by(short_code=code).first():
             return code
 
 
@@ -238,58 +269,126 @@ def healthz():
     return {'status': 'ok'}
 
 
-@app.route('/<short_code>')
-def redirect_to_url(short_code):
+def _resolve_proxy_link(short_code):
+    if not env_bool('ENABLE_PROXY'):
+        abort(403)
+    if not SHORT_CODE_PATTERN.fullmatch(short_code):
+        abort(404)
     link = Link.query.filter_by(short_code=short_code).first_or_404()
+    if link.mode != 'proxy':
+        abort(404)
     target = normalized_url(link.original_url)
     if not target:
         abort(410)
-    link.clicks = Link.clicks + 1
-    db.session.commit()
+    parsed = urlparse(target)
+    return link, target, f'{parsed.scheme}://{parsed.netloc}'
+
+
+def _run_proxy(target_url, target_origin, short_code, set_session_cookie=False):
+    try:
+        return execute_proxy_request(
+            target_url=target_url,
+            entry_origin=target_origin,
+            short_code=short_code,
+            set_session_cookie=set_session_cookie,
+            secret_key=app.config['SECRET_KEY'],
+            target_validator=public_proxy_target,
+        )
+    except requests.RequestException:
+        app.logger.exception('代理目标访问失败')
+        abort(502)
+
+
+def _try_proxy_fallback(decoded_path):
+    first_seg = decoded_path.lstrip('/').split('/', 1)[0].lower()
+    if first_seg in RESERVED_SHORT_CODES or not env_bool('ENABLE_PROXY'):
+        abort(404)
+
+    active_code = extract_referer_short_code(SHORT_CODE_PATTERN)
+    if not active_code and request.headers.get('Sec-Fetch-Mode') != 'navigate':
+        cookie_codes = parse_proxy_cookie(app.config['SECRET_KEY'], request.cookies.get(PROXY_COOKIE_NAME))
+        if cookie_codes:
+            active_code = cookie_codes[-1]
+    if not active_code:
+        abort(404)
+
+    link = Link.query.filter_by(short_code=active_code, mode='proxy').first()
+    if not link:
+        abort(404)
+    target = normalized_url(link.original_url)
+    if not target:
+        abort(410)
+    parsed = urlparse(target)
+    target_origin = f'{parsed.scheme}://{parsed.netloc}'
+    raw_suffix, raw_query = extract_raw_subpath_and_query('', decoded_path)
+    upstream_url = f'{target_origin}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
+    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=False)
+
+
+@app.route('/_p/<short_code>', defaults={'subpath': ''}, methods=PROXY_METHODS)
+@app.route('/_p/<short_code>/', defaults={'subpath': ''}, methods=PROXY_METHODS)
+@app.route('/_p/<short_code>/<path:subpath>', methods=PROXY_METHODS)
+@csrf.exempt
+def proxy_same_origin(short_code, subpath):
+    link, _target, target_origin = _resolve_proxy_link(short_code)
+    if request.method not in {'GET', 'HEAD', 'OPTIONS'} and not has_valid_proxy_context(
+        app.config['SECRET_KEY'], link.short_code, SHORT_CODE_PATTERN
+    ):
+        abort(403)
+    raw_suffix, raw_query = extract_raw_subpath_and_query(f'/_p/{short_code}', subpath)
+    upstream_url = f'{target_origin}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
+    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=False)
+
+
+@app.route('/_px/<short_code>/<scheme>/<netloc>', defaults={'subpath': ''}, methods=PROXY_METHODS)
+@app.route('/_px/<short_code>/<scheme>/<netloc>/', defaults={'subpath': ''}, methods=PROXY_METHODS)
+@app.route('/_px/<short_code>/<scheme>/<netloc>/<path:subpath>', methods=PROXY_METHODS)
+@csrf.exempt
+def proxy_external_origin(short_code, scheme, netloc, subpath):
+    scheme = scheme.lower()
+    if scheme not in {'http', 'https'}:
+        abort(400)
+    if request.headers.get('Sec-Fetch-Mode') == 'navigate' or request.headers.get('Sec-Fetch-Dest') == 'document':
+        abort(403)
+    if not has_valid_proxy_context(app.config['SECRET_KEY'], short_code, SHORT_CODE_PATTERN):
+        abort(403)
+    link, _target, target_origin = _resolve_proxy_link(short_code)
+    raw_suffix, raw_query = extract_raw_subpath_and_query(f'/_px/{short_code}/{scheme}/{netloc}', subpath)
+    upstream_url = f'{scheme}://{netloc}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
+    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=False)
+
+
+@app.route('/<short_code>', methods=PROXY_METHODS)
+@csrf.exempt
+def redirect_to_url(short_code):
+    link = Link.query.filter_by(short_code=short_code).first()
+    if not link:
+        return _try_proxy_fallback(short_code)
+    if request.method not in {'GET', 'HEAD'} and link.mode != 'proxy':
+        abort(405)
+    target = normalized_url(link.original_url)
+    if not target:
+        abort(410)
+    if request.method == 'GET':
+        link.clicks = Link.clicks + 1
+        db.session.commit()
     if link.mode != 'proxy':
         return redirect(target, 302)
     if not env_bool('ENABLE_PROXY') or not public_proxy_target(target):
         abort(403)
-    try:
-        with requests.Session() as session:
-            current_url = target
-            response = None
-            for _ in range(10):
-                parsed = urlparse(current_url)
-                if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
-                    abort(400)
-                if not public_proxy_target(current_url):
-                    abort(403)
-                resp = session.get(current_url, timeout=(3.05, 15), allow_redirects=False, stream=True, headers={'User-Agent': 'ShortenYourURL/1.0'})
-                if resp.is_redirect:
-                    location = resp.headers.get('Location')
-                    if not location:
-                        response = resp
-                        break
-                    current_url = urljoin(current_url, location)
-                    resp.close()
-                    continue
-                response = resp
-                break
-            else:
-                abort(502)
+    parsed = urlparse(target)
+    target_origin = f'{parsed.scheme}://{parsed.netloc}'
+    raw_query = request.environ.get('QUERY_STRING', '')
+    upstream_url = target
+    if raw_query:
+        upstream_url = f'{target}&{raw_query}' if parsed.query else f'{target}?{raw_query}'
+    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=True)
 
-            if response is None:
-                abort(502)
 
-            content = bytearray()
-            for chunk in response.iter_content(64 * 1024):
-                content.extend(chunk)
-                if len(content) > 10 * 1024 * 1024:
-                    response.close()
-                    abort(413)
-            headers = {k: v for k, v in response.headers.items() if k.lower() in {'content-type', 'content-disposition', 'cache-control', 'last-modified', 'etag'}}
-            status_code = response.status_code
-            response.close()
-            return bytes(content), status_code, headers
-    except requests.RequestException:
-        app.logger.exception('代理目标访问失败')
-        abort(502)
+@app.route('/<path:fallback_path>', methods=PROXY_METHODS)
+@csrf.exempt
+def proxy_fallback_route(fallback_path):
+    return _try_proxy_fallback(fallback_path)
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -353,6 +452,8 @@ def create_link():
         flash('请输入有效的 HTTP/HTTPS 链接，且链接中不能包含账号凭证。', 'danger')
     elif code and not SHORT_CODE_PATTERN.fullmatch(code):
         flash('短码需为 1-50 位字母、数字、下划线或短横线。', 'danger')
+    elif code and code.lower() in RESERVED_SHORT_CODES:
+        flash(f'短码 “{code}” 为系统保留路径。', 'danger')
     elif code and Link.query.filter_by(short_code=code).first():
         flash(f'短码 “{code}” 已被占用。', 'danger')
     else:

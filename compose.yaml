@@ -13,7 +13,9 @@ services:
       TRUST_PROXY_COUNT: "${TRUST_PROXY_COUNT:-0}"
       TRUSTED_HOSTS: "${TRUSTED_HOSTS:-}"
       ENABLE_PROXY: "${ENABLE_PROXY:-false}"
+      PROXY_MAX_MB: "${PROXY_MAX_MB:-50}"
       WEB_WORKERS: "${WEB_WORKERS:-2}"
+      WEB_THREADS: "${WEB_THREADS:-8}"
     volumes:
       - shortener_data:/data
     read_only: true

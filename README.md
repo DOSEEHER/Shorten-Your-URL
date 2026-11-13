@@ -97,8 +97,10 @@ docker cp $(docker compose ps -q shortener):/data/backup.db ./shortener-backup.d
 | `COOKIE_SECURE` | `false` | HTTPS 部署时设为 `true` |
 | `TRUST_PROXY_COUNT` | `0` | 可信反向代理层数 |
 | `TRUSTED_HOSTS` | 空 | 允许的 Host，多个值用逗号分隔 |
-| `ENABLE_PROXY` | `false` | 是否开启代理模式 |
+| `ENABLE_PROXY` | `false` | 是否开启代理模式（支持 SPA 子资源与跨域 API 中转） |
+| `PROXY_MAX_MB` | `50` | 代理模式单响应最大允许体积（MB） |
 | `WEB_WORKERS` | `2` | Gunicorn Worker 数量 |
+| `WEB_THREADS` | `8` | 每个 Gunicorn Worker 的并发线程数 |
 | `SECRET_KEY` | 自动生成 | 可选；若设置需至少 32 字符 |
 
 ## 本地开发

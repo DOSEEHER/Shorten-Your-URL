@@ -317,7 +317,7 @@
 
                     <div class="form-grid-full info-box">
                         <p><strong>🦘 跳转模式：</strong>速度极快，使用 302 临时重定向跳转，但地址栏会暴露原始链接。</p>
-                        {% if proxy_enabled %}<p><strong>🐢 代理模式：</strong>仅代理公开网络目标，并限制响应大小与超时。</p>{% else %}<p><strong>安全提示：</strong>代理模式默认关闭，可通过 ENABLE_PROXY 显式启用。</p>{% endif %}
+                        {% if proxy_enabled %}<p><strong>🐢 代理模式：</strong>服务端中转访问公开目标站点（支持现代 SPA 静态分片、WASM 与跨域子资源代理），并限制响应体积与超时。</p>{% else %}<p><strong>安全提示：</strong>代理模式默认关闭，可通过 ENABLE_PROXY 显式启用。</p>{% endif %}
                     </div>
                 </div>
 
