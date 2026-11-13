@@ -16,6 +16,7 @@ services:
       PROXY_MAX_MB: "${PROXY_MAX_MB:-50}"
       WEB_WORKERS: "${WEB_WORKERS:-2}"
       WEB_THREADS: "${WEB_THREADS:-8}"
+      WEB_TIMEOUT: "${WEB_TIMEOUT:-120}"
     volumes:
       - shortener_data:/data
     read_only: true

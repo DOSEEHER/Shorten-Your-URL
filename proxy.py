@@ -14,6 +14,9 @@ from urllib.parse import quote, urljoin, urlparse
 import requests
 from flask import Response, abort, request, stream_with_context
 from requests.adapters import HTTPAdapter
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
+from urllib3.util.retry import Retry
+from werkzeug.datastructures import Headers
 
 PROXY_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']
 PROXY_COOKIE_NAME = '__syu_proxy'
@@ -110,7 +113,16 @@ def get_proxy_session():
             if _shared_session is None:
                 session = requests.Session()
                 session.cookies.set_policy(_RejectAllCookiesPolicy())
-                adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32)
+                retry_strategy = Retry(
+                    total=2,
+                    connect=2,
+                    read=1,
+                    redirect=False,
+                    status=0,
+                    allowed_methods=frozenset({'GET', 'HEAD', 'OPTIONS'}),
+                    backoff_factor=0.2,
+                )
+                adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=retry_strategy)
                 session.mount('http://', adapter)
                 session.mount('https://', adapter)
                 _shared_session = session
@@ -131,15 +143,18 @@ def is_public_proxy_target(url):
         cached = _dns_cache.get(hostname)
         if cached and cached[1] > now:
             return cached[0]
+    resolved_ok = False
     try:
         addresses = socket.getaddrinfo(hostname, None)
-        allowed = bool(addresses) and all(ipaddress.ip_address(addr[4][0]).is_global for addr in addresses)
+        resolved_ok = bool(addresses)
+        allowed = resolved_ok and all(ipaddress.ip_address(addr[4][0]).is_global for addr in addresses)
     except (socket.gaierror, ValueError):
         allowed = False
-    with _dns_cache_lock:
-        if len(_dns_cache) > 1024:
-            _dns_cache.clear()
-        _dns_cache[hostname] = (allowed, now + DNS_CACHE_TTL)
+    if resolved_ok:
+        with _dns_cache_lock:
+            if len(_dns_cache) > 1024:
+                _dns_cache.clear()
+            _dns_cache[hostname] = (allowed, now + DNS_CACHE_TTL)
     return allowed
 
 
@@ -740,6 +755,17 @@ def extract_raw_subpath_and_query(route_prefix, decoded_subpath=''):
     return f'/{encoded}' if encoded else '/', raw_query
 
 
+def _ci_get(headers, name, default=''):
+    val = headers.get(name)
+    if val is not None:
+        return val
+    target = name.lower()
+    for k, v in headers.items():
+        if k.lower() == target:
+            return v
+    return default
+
+
 def execute_proxy_request(
     target_url,
     entry_origin,
@@ -773,7 +799,7 @@ def execute_proxy_request(
                 stream=True,
             )
             if resp.is_redirect:
-                location = resp.headers.get('Location')
+                location = _ci_get(resp.headers, 'Location', '')
                 if not location:
                     upstream = resp
                     break
@@ -786,12 +812,12 @@ def execute_proxy_request(
             upstream = resp
             break
         else:
-            abort(502)
+            raise requests.TooManyRedirects('上游重定向次数超过上限')
 
         if upstream is None:
-            abort(502)
+            raise requests.ConnectionError('未能获取上游响应')
 
-        declared_len = upstream.headers.get('Content-Length')
+        declared_len = _ci_get(upstream.headers, 'Content-Length', '')
         if declared_len:
             try:
                 if int(declared_len) > max_bytes:
@@ -800,17 +826,19 @@ def execute_proxy_request(
             except ValueError:
                 pass
 
-        resp_headers = {
-            k: v for k, v in upstream.headers.items() if k.lower() in PASSTHROUGH_RESPONSE_HEADERS
-        }
-        content_type = upstream.headers.get('Content-Type', '')
+        resp_headers = Headers()
+        for k, v in upstream.headers.items():
+            if k.lower() in PASSTHROUGH_RESPONSE_HEADERS:
+                clean_v = re.sub(r'[\x00-\x08\x0a-\x1f\x7f]', '', str(v))
+                resp_headers.set(k, clean_v)
+        content_type = _ci_get(upstream.headers, 'Content-Type', '')
         lower_ct = content_type.lower()
         final_parsed = urlparse(current_url)
         final_origin = f'{final_parsed.scheme}://{final_parsed.netloc}'
         effective_target_origin = final_origin if set_session_cookie else entry_origin
 
         if final_parsed.path.lower().endswith('.wasm') and (not lower_ct or 'octet-stream' in lower_ct):
-            resp_headers['Content-Type'] = 'application/wasm'
+            resp_headers.set('Content-Type', 'application/wasm')
             content_type = 'application/wasm'
             lower_ct = content_type.lower()
 
@@ -830,24 +858,26 @@ def execute_proxy_request(
             text = _decode_text(bytes(buf), content_type)
             if 'text/css' in lower_ct:
                 rewritten = rewrite_css_for_proxy(text, current_url, effective_target_origin, short_code)
-                resp_headers['Content-Type'] = 'text/css; charset=utf-8'
+                resp_headers.set('Content-Type', 'text/css; charset=utf-8')
             else:
                 rewritten = rewrite_html_for_proxy(text, current_url, effective_target_origin, short_code)
-                resp_headers['Content-Type'] = 'text/html; charset=utf-8'
+                resp_headers.set('Content-Type', 'text/html; charset=utf-8')
             resp_headers.pop('ETag', None)
-            resp_headers.pop('etag', None)
             flask_resp = Response(rewritten.encode('utf-8'), status=status_code, headers=resp_headers)
         else:
-            upstream_encoding = (upstream.headers.get('Content-Encoding') or '').lower().strip()
+            upstream_encoding = _ci_get(upstream.headers, 'Content-Encoding', '').lower().strip()
             client_accepts_gzip = 'gzip' in (request.headers.get('Accept-Encoding') or '').lower()
             raw_obj = getattr(upstream, 'raw', None)
             if upstream_encoding == 'gzip' and client_accepts_gzip and raw_obj is not None and hasattr(raw_obj, 'stream'):
-                resp_headers['Content-Encoding'] = 'gzip'
+                resp_headers.set('Content-Encoding', 'gzip')
                 chunk_source = raw_obj.stream(64 * 1024, decode_content=False)
             else:
                 chunk_source = upstream.iter_content(64 * 1024)
 
-            pre_limit = min(max_bytes + 1, 2 * 1024 * 1024)
+            if not declared_len and max_bytes <= 2 * 1024 * 1024:
+                pre_limit = max_bytes + 1
+            else:
+                pre_limit = min(max_bytes + 1, 64 * 1024)
             pre_buf = bytearray()
             it = iter(chunk_source)
             exhausted = False
@@ -883,6 +913,8 @@ def execute_proxy_request(
                             if total > max_bytes:
                                 break
                             yield chunk
+                    except (requests.RequestException, Urllib3HTTPError):
+                        return
                     finally:
                         upstream.close()
 
@@ -905,6 +937,10 @@ def execute_proxy_request(
                 path='/',
             )
         return flask_resp
+    except Urllib3HTTPError as exc:
+        if upstream is not None:
+            upstream.close()
+        raise requests.ConnectionError(str(exc)) from exc
     except requests.RequestException:
         if upstream is not None:
             upstream.close()

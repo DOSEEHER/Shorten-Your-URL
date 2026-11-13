@@ -4,7 +4,7 @@ from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
-from flask import Flask, abort, flash, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, flash, redirect, render_template, request, url_for
 from proxy import (
     PROXY_COOKIE_NAME,
     PROXY_CSP,
@@ -294,9 +294,26 @@ def _run_proxy(target_url, target_origin, short_code, set_session_cookie=False):
             secret_key=app.config['SECRET_KEY'],
             target_validator=public_proxy_target,
         )
-    except requests.RequestException:
-        app.logger.exception('代理目标访问失败')
-        abort(502)
+    except requests.RequestException as exc:
+        app.logger.exception('代理目标访问失败: %s', target_url)
+        err_kind = exc.__class__.__name__
+        body = (
+            '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+            '<title>502 上游目标连接失败 | ShortenYourURL</title>'
+            '<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:600px;margin:10vh auto;'
+            'padding:0 20px;color:#1f2937;line-height:1.6}code{background:#f3f4f6;padding:2px 6px;border-radius:4px}</style>'
+            '</head><body><h2>502 代理上游访问失败</h2>'
+            '<p>短链接服务本身运行正常，但在请求目标站点时发生网络异常（<code>'
+            f'{err_kind}'
+            '</code>），请稍后刷新重试或查看容器日志 <code>docker compose logs --tail=50 shortener</code>。</p>'
+            '</body></html>'
+        )
+        return Response(
+            body,
+            status=502,
+            mimetype='text/html',
+            headers={'Cache-Control': 'no-store', 'X-Proxy-Error': err_kind},
+        )
 
 
 def _try_proxy_fallback(decoded_path):

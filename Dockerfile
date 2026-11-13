@@ -10,5 +10,5 @@ RUN mkdir -p /data && sed -i 's/\r$//' /app/docker-entrypoint.sh && chown -R app
 USER app
 EXPOSE 5000
 VOLUME ["/data"]
-HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=2)"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 CMD ["python", "-c", "import os, urllib.request; h = [x.strip() for x in os.environ.get('TRUSTED_HOSTS', '').split(',') if x.strip()]; req = urllib.request.Request('http://127.0.0.1:5000/healthz', headers={'Host': h[0]} if h else {}); urllib.request.urlopen(req, timeout=2)"]
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

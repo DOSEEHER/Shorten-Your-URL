@@ -246,6 +246,48 @@ class ApplicationTest(unittest.TestCase):
         with app.app_context():
             self.assertIsNone(Link.query.filter_by(short_code='_p').first())
 
+    def test_proxy_upstream_errors_and_header_normalization(self):
+        import requests
+        from urllib3.exceptions import ProtocolError
+
+        self._create_proxy_link('err-demo', 'https://app.example.com/view')
+
+        class BrokenRawStream:
+            def stream(self, _amt, decode_content=False):
+                raise ProtocolError('Connection broken')
+
+        broken_gzip_resp = FakeUpstreamResponse(
+            b'',
+            200,
+            {'content-type': 'application/javascript', 'Content-Encoding': 'gzip'},
+        )
+        broken_gzip_resp.raw = BrokenRawStream()
+
+        lowercase_html_resp = FakeUpstreamResponse(
+            '<html><head></head><body>ok</body></html>',
+            200,
+            {'content-type': 'text/html', 'etag': '"abc"'},
+        )
+
+        with patch.dict(os.environ, {'ENABLE_PROXY': 'true'}), patch('app.public_proxy_target', return_value=True):
+            with patch('proxy.requests.Session.request', return_value=lowercase_html_resp):
+                ok_resp = self.client.get('/err-demo')
+                self.assertEqual(ok_resp.status_code, 200)
+                ct_values = ok_resp.headers.getlist('Content-Type')
+                self.assertEqual(ct_values, ['text/html; charset=utf-8'])
+                self.assertIsNone(ok_resp.headers.get('ETag'))
+
+            with patch('proxy.requests.Session.request', return_value=broken_gzip_resp):
+                err_resp = self.client.get('/_p/err-demo/chunk.js', headers={'Accept-Encoding': 'gzip'})
+                self.assertEqual(err_resp.status_code, 502)
+                self.assertEqual(err_resp.headers.get('X-Proxy-Error'), 'ConnectionError')
+
+            with patch('proxy.requests.Session.request', side_effect=requests.ConnectTimeout('timed out')):
+                timeout_resp = self.client.get('/err-demo')
+                self.assertEqual(timeout_resp.status_code, 502)
+                self.assertEqual(timeout_resp.headers.get('X-Proxy-Error'), 'ConnectTimeout')
+                self.assertIn('502 代理上游访问失败', timeout_resp.data.decode('utf-8'))
+
 
 if __name__ == '__main__':
     unittest.main()
