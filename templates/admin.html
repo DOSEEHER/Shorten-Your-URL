@@ -174,7 +174,6 @@
         align-items: center;
     }
 
-    /* 隐藏原生小三角 */
     details.create-panel summary::-webkit-details-marker {
         display: none;
     }
@@ -200,7 +199,6 @@
         to { opacity: 1; transform: translateY(0); }
     }
 
-    /* 🍎 原生并排表单布局（大屏幕上并排更精致） */
     .form-grid {
         display: grid;
         grid-template-columns: 1fr;
@@ -216,9 +214,7 @@
         }
     }
 
-    /* 📱 移动端表格转卡片列表 */
     @media (max-width: 768px) {
-        /* 隐藏表格头部 */
         table, thead, tbody, th, td, tr {
             display: block;
         }
@@ -231,7 +227,7 @@
         
         tr {
             background: #ffffff;
-            border-bottom: 8px solid #f5f5f7; /* 间隔线 */
+            border-bottom: 8px solid #f5f5f7;
             padding: 16px 20px;
         }
 
@@ -285,7 +281,6 @@
 </div>
 
 <div class="dashboard-layout">
-    <!-- 上方折叠面板：新建短链接 -->
     <details class="create-panel" open>
         <summary>新建短链接</summary>
         <div class="create-form-container">
@@ -311,13 +306,13 @@
                         <label for="mode">跳转模式</label>
                         <select id="mode" name="mode" required>
                             <option value="redirect" selected>🦘 跳转模式 (302 Redirect)</option>
-                            {% if proxy_enabled %}<option value="proxy">🐢 代理模式 (Backend Proxy)</option>{% endif %}
+                            {% if can_use_proxy %}<option value="proxy">🐢 代理模式 (Backend Proxy)</option>{% endif %}
                         </select>
                     </div>
 
                     <div class="form-grid-full info-box">
                         <p><strong>🦘 跳转模式：</strong>速度极快，使用 302 临时重定向跳转，但地址栏会暴露原始链接。</p>
-                        {% if proxy_enabled %}<p><strong>🐢 代理模式：</strong>服务端中转访问公开目标站点（支持现代 SPA 静态分片、WASM 与跨域子资源代理），并限制响应体积与超时。</p>{% else %}<p><strong>安全提示：</strong>代理模式默认关闭，可通过 ENABLE_PROXY 显式启用。</p>{% endif %}
+                        {% if can_use_proxy %}<p><strong>🐢 代理模式：</strong>服务端安全中转访问公开目标站点（含防 DNS 重绑定、隔离会话 Cookie、跨源子资源及 SPA 路由支持）。</p>{% elif proxy_enabled %}<p><strong>权限提示：</strong>当前仅管理员账号允许创建代理模式短链。</p>{% else %}<p><strong>安全提示：</strong>代理模式默认关闭，可通过 ENABLE_PROXY 显式启用，生产环境建议搭配 PROXY_PUBLIC_BASE_URL 独立子域名隔离。</p>{% endif %}
                     </div>
                 </div>
 
@@ -330,7 +325,6 @@
         </div>
     </details>
 
-    <!-- 下方：链接列表 -->
     <div class="glass-card" style="padding: 0;">
         <div style="padding: 24px 30px; border-bottom: 1px solid rgba(0, 0, 0, 0.05); display: flex; justify-content: space-between; align-items: center;">
             <h3 style="font-weight: 600; font-size: 1.1rem; color: var(--text-primary);">现有链接列表</h3>
@@ -359,13 +353,14 @@
                     </thead>
                     <tbody>
                         {% for link in links %}
+                        {% set link_base = proxy_base_url if link.mode == 'proxy' else public_base_url %}
                         <tr>
                             <td data-label="短链接">
                                 <div class="short-link-wrapper">
-                                    <a href="{{ public_base_url }}/{{ link.short_code }}" class="short-link-text" target="_blank">
+                                    <a href="{{ link_base }}/{{ link.short_code }}" class="short-link-text" target="_blank" rel="noopener">
                                         {{ link.short_code }}
                                     </a>
-                                    <button class="copy-btn" data-url="{{ public_base_url }}/{{ link.short_code }}" onclick="copyLink(this.dataset.url, this)">复制</button>
+                                    <button class="copy-btn" data-url="{{ link_base }}/{{ link.short_code }}" onclick="copyLink(this.dataset.url, this)">复制</button>
                                 </div>
                             </td>
                             <td data-label="长链接">

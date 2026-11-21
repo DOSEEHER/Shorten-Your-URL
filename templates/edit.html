@@ -3,6 +3,7 @@
 {% block title %}编辑链接 - {{ link.short_code }}{% endblock %}
 
 {% block content %}
+{% set link_base = proxy_base_url if link.mode == 'proxy' else public_base_url %}
 <div style="display: flex; justify-content: center; align-items: center; min-height: 60vh; padding: 20px 0;">
     <div class="glass-card" style="width: 100%; max-width: 580px; padding: 40px 30px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); border: 1px solid rgba(0, 0, 0, 0.06);">
         <div style="margin-bottom: 30px; border-bottom: 1px solid rgba(0, 0, 0, 0.05); padding-bottom: 20px;">
@@ -12,8 +13,8 @@
             </p>
             <div style="margin-top: 10px; padding: 12px 16px; background: #f5f5f7; border-radius: 8px; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between;">
                 <span style="color: var(--text-secondary);">短网址链接:</span>
-                <a href="{{ public_base_url }}/{{ link.short_code }}" target="_blank" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">
-                    {{ public_base_url }}/{{ link.short_code }}
+                <a href="{{ link_base }}/{{ link.short_code }}" target="_blank" rel="noopener" style="color: var(--primary-color); text-decoration: none; font-weight: 500;">
+                    {{ link_base }}/{{ link.short_code }}
                 </a>
             </div>
         </div>
@@ -36,7 +37,7 @@
                 <label for="mode">跳转模式</label>
                 <select id="mode" name="mode" required>
                     <option value="redirect" {% if link.mode == 'redirect' %}selected{% endif %}>🦘 跳转模式 (302 Redirect)</option>
-                    {% if proxy_enabled %}<option value="proxy" {% if link.mode == 'proxy' %}selected{% endif %}>🐢 代理模式 (Backend Proxy)</option>{% endif %}
+                    {% if can_use_proxy or link.mode == 'proxy' %}<option value="proxy" {% if link.mode == 'proxy' %}selected{% endif %}>🐢 代理模式 (Backend Proxy)</option>{% endif %}
                 </select>
             </div>
             

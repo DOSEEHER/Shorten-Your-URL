@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}短链接管理{% endblock %} | istill.live</title>
-    <!-- 引入高质感字体 -->
+    <!-- 引入中文字体（移除 Google Fonts 不存在的 SF Pro Display 以避免 400 错误） -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-color: #f5f5f7;
@@ -255,10 +255,10 @@
                 justify-content: center;
                 gap: 8px;
                 font-size: 0.8rem;
-                flex-wrap: wrap; /* 支持折行防溢出 */
+                flex-wrap: wrap;
             }
             nav span.welcome {
-                display: none; /* 移动端隐藏欢迎语以节省空间 */
+                display: none;
             }
             nav a {
                 padding: 5px 10px;

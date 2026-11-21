@@ -1,5 +1,6 @@
 import os
 import re
+import socket
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -12,6 +13,7 @@ os.environ['COOKIE_SECURE'] = 'false'
 os.environ['ENABLE_PROXY'] = 'false'
 
 from app import Link, User, app, db, init_db_and_admin
+from proxy import clear_dns_cache, get_proxy_session
 
 
 class FakeUpstreamResponse:
@@ -48,6 +50,7 @@ class ApplicationTest(unittest.TestCase):
 
     def setUp(self):
         self.client = app.test_client()
+        clear_dns_cache()
         with app.app_context():
             Link.query.delete()
             User.query.filter(User.username != 'admin').delete()
@@ -94,7 +97,9 @@ class ApplicationTest(unittest.TestCase):
 
     def test_registration_absent_csrf_and_security_headers(self):
         self.assertEqual(self.client.get('/register').status_code, 404)
-        self.assertIn('Content-Security-Policy', self.client.get('/').headers)
+        home = self.client.get('/')
+        self.assertIn('Content-Security-Policy', home.headers)
+        self.assertEqual(home.headers.get('Cross-Origin-Opener-Policy'), 'same-origin')
         response = self.client.post('/login', data={'username': 'admin', 'password': 'x'})
         self.assertEqual(response.status_code, 302)
 
@@ -104,11 +109,13 @@ class ApplicationTest(unittest.TestCase):
         with app.app_context():
             admin = User.query.filter_by(username='admin').one()
             self.assertIsNotNone(admin.locked_until)
-            self.assertGreater(admin.locked_until, __import__('datetime').datetime.now(__import__('datetime').timezone.utc).replace(tzinfo=None))
+            self.assertGreater(
+                admin.locked_until,
+                __import__('datetime').datetime.now(__import__('datetime').timezone.utc).replace(tzinfo=None),
+            )
         self.assertEqual(self.login('admin', 'V7!mQ2#zL9@p').status_code, 401)
         with app.app_context():
             self.assertEqual(User.query.filter_by(username='admin').one().failed_login_count, 5)
-
 
     def _create_proxy_link(self, short_code='spa-demo', url='https://app.example.com/s/token-123'):
         with app.app_context():
@@ -122,12 +129,16 @@ class ApplicationTest(unittest.TestCase):
         captured_requests = []
 
         sample_html = (
+            '<!-- <head><title>commented</title></head> -->'
             '<!DOCTYPE html><html><head>'
             '<link rel="preconnect" href="https://fonts.googleapis.com">'
             '<link rel="stylesheet" href="/_next/static/css/app.css?dpl=1" integrity="sha384-abc">'
             '<script src="/_next/static/chunks/main.js?dpl=1" async=""></script>'
+            '<meta http-equiv="refresh" content="10; url=/dashboard">'
             '</head><body>'
             '<!--$?--><template id="B:0"></template><!--/$-->'
+            '<a title="1 > 0" href="/guide">Guide</a>'
+            '<div style="background-image: url(\'/bg.png\')"></div>'
             '<img src="/logo.svg" srcset="/a.png 1x, https://cdn.example.org/b.png 2x">'
             '<script>self.__next_f.push([1,"/_next/static/css/keep-inline-json.css"])</script>'
             '</body></html>'
@@ -138,7 +149,7 @@ class ApplicationTest(unittest.TestCase):
         )
 
         def fake_request(method, url, headers=None, data=None, **_kwargs):
-            captured_requests.append((method, url, data))
+            captured_requests.append((method, url, dict(headers or {}), data))
             if url == 'https://app.example.com/s/token-123':
                 return FakeUpstreamResponse(sample_html, 200, {'Content-Type': 'text/html; charset=utf-8'})
             if url == 'https://app.example.com/_next/static/css/app.css?dpl=1':
@@ -160,10 +171,14 @@ class ApplicationTest(unittest.TestCase):
         ):
             entry = self.client.get('/spa-demo')
             self.assertEqual(entry.status_code, 200)
+            self.assertEqual(entry.headers.get('Cross-Origin-Opener-Policy'), 'unsafe-none')
             html_out = entry.data.decode('utf-8')
-            self.assertIn('data-syu-proxy="1"', html_out)
+            self.assertTrue(html_out.startswith('<!-- <head><title>commented</title></head> --><!DOCTYPE html><html><head><script data-syu-proxy="1">'))
             self.assertIn('src="/_p/spa-demo/_next/static/chunks/main.js?dpl=1"', html_out)
             self.assertIn('href="/_p/spa-demo/_next/static/css/app.css?dpl=1"', html_out)
+            self.assertIn('href="/_p/spa-demo/guide"', html_out)
+            self.assertIn('/_p/spa-demo/bg.png', html_out)
+            self.assertIn('url=/_p/spa-demo/dashboard', html_out)
             self.assertNotIn('integrity=', html_out)
             self.assertNotIn('fonts.googleapis.com', html_out)
             self.assertIn('/_px/spa-demo/https/cdn.example.org/b.png 2x', html_out)
@@ -189,10 +204,14 @@ class ApplicationTest(unittest.TestCase):
             raw_qs = 'X-Goog-Credential=svc%40proj.iam%2F2026&sig=abc'
             ext_resp = self.client.get(f'/_px/spa-demo/https/api.example.org/s/token-123/objects/1?{raw_qs}')
             self.assertEqual(ext_resp.status_code, 200)
-            self.assertTrue(any(u.endswith(f'/objects/1?{raw_qs}') for _, u, _ in captured_requests))
+            self.assertTrue(any(u.endswith(f'/objects/1?{raw_qs}') for _, u, _, _ in captured_requests))
 
-            post_resp = self.client.post('/_px/spa-demo/https/api.example.org/telemetry', data=b'{"ev":1}')
+            big_payload = b'x' * (1024 * 1024 + 2048)
+            post_resp = self.client.post('/_px/spa-demo/https/api.example.org/telemetry', data=big_payload)
             self.assertEqual(post_resp.status_code, 200)
+            post_hdrs = [h for m, u, h, _ in captured_requests if m == 'POST' and u == 'https://api.example.org/telemetry'][0]
+            self.assertEqual(post_hdrs.get('Origin'), 'https://app.example.com')
+            self.assertEqual(post_hdrs.get('Referer'), 'https://app.example.com/')
 
             fb_resp = self.client.get('/_next/static/chunks/lazy.js', headers={'Referer': 'http://localhost/spa-demo'})
             self.assertEqual(fb_resp.status_code, 200)
@@ -204,7 +223,47 @@ class ApplicationTest(unittest.TestCase):
         with app.app_context():
             self.assertEqual(Link.query.filter_by(short_code='spa-demo').one().clicks, 1)
 
-    def test_proxy_security_boundaries_ssrf_open_proxy_and_route_isolation(self):
+    def test_cross_origin_entry_redirect_and_scoped_cookies(self):
+        self._create_proxy_link('redir-demo', 'https://example.com/start')
+        seen_calls = []
+
+        def fake_request(method, url, headers=None, data=None, **_kwargs):
+            seen_calls.append((method, url, dict(headers or {})))
+            if url == 'https://example.com/start':
+                return FakeUpstreamResponse(
+                    b'',
+                    301,
+                    {
+                        'Location': 'https://www.example.com/app',
+                        'Set-Cookie': 'sid=token_abc; Domain=example.com; Path=/; HttpOnly',
+                    },
+                )
+            if url == 'https://www.example.com/app':
+                return FakeUpstreamResponse(
+                    '<html><head><script src="/bundle.js"></script></head><body>App</body></html>',
+                    200,
+                    {'Content-Type': 'text/html; charset=utf-8'},
+                )
+            if url == 'https://www.example.com/bundle.js':
+                return FakeUpstreamResponse('console.log("loaded");', 200, {'Content-Type': 'application/javascript'})
+            return FakeUpstreamResponse('missing', 404, {'Content-Type': 'text/plain'})
+
+        with patch.dict(os.environ, {'ENABLE_PROXY': 'true'}), patch('app.public_proxy_target', return_value=True), patch(
+            'proxy.requests.Session.request', side_effect=fake_request
+        ):
+            entry = self.client.get('/redir-demo')
+            self.assertEqual(entry.status_code, 200)
+            self.assertIn(b'src="/_p/redir-demo/bundle.js"', entry.data)
+            app_call_hdrs = [h for _, u, h in seen_calls if u == 'https://www.example.com/app'][0]
+            self.assertIn('sid=token_abc', app_call_hdrs.get('Cookie', ''))
+
+            bundle = self.client.get('/_p/redir-demo/bundle.js')
+            self.assertEqual(bundle.status_code, 200)
+            self.assertEqual(bundle.data, b'console.log("loaded");')
+            bundle_hdrs = [h for _, u, h in seen_calls if u == 'https://www.example.com/bundle.js'][0]
+            self.assertIn('sid=token_abc', bundle_hdrs.get('Cookie', ''))
+
+    def test_proxy_security_boundaries_ssrf_open_proxy_sw_and_route_isolation(self):
         self._create_proxy_link('sec-demo', 'https://app.example.com/page')
         fresh_client = app.test_client()
 
@@ -213,6 +272,13 @@ class ApplicationTest(unittest.TestCase):
         ):
             self.assertEqual(
                 fresh_client.get('/_px/sec-demo/https/api.example.org/data').status_code,
+                403,
+            )
+            self.assertEqual(
+                fresh_client.get(
+                    '/_px/sec-demo/https/api.example.org/data',
+                    headers={'Referer': 'http://localhost/sec-demo'},
+                ).status_code,
                 403,
             )
             self.assertEqual(
@@ -230,12 +296,53 @@ class ApplicationTest(unittest.TestCase):
 
             with patch(
                 'proxy.requests.Session.request',
+                return_value=FakeUpstreamResponse('<html></html>', 200, {'Content-Type': 'text/html'}),
+            ):
+                self.assertEqual(fresh_client.get('/sec-demo').status_code, 200)
+
+            self.assertEqual(
+                fresh_client.get('/sw.js', headers={'Service-Worker': 'script', 'Referer': 'http://localhost/sec-demo'}).status_code,
+                403,
+            )
+            self.assertEqual(
+                fresh_client.get('/_p/sec-demo/sw.js', headers={'Sec-Fetch-Dest': 'serviceworker'}).status_code,
+                403,
+            )
+            self.assertEqual(
+                fresh_client.get('/_px/sec-demo/https/api.example.org:8443/scan').status_code,
+                403,
+            )
+
+            with patch(
+                'proxy.requests.Session.request',
                 return_value=FakeUpstreamResponse(b'x' * (1024 * 1024 + 10), 200, {'Content-Type': 'application/octet-stream'}),
             ):
                 self.assertEqual(fresh_client.get('/_p/sec-demo/huge.bin').status_code, 413)
 
+        with patch.dict(os.environ, {'ENABLE_PROXY': 'true'}), patch(
+            'proxy.socket.getaddrinfo',
+            side_effect=[
+                [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.216.34', 443))],
+                [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('127.0.0.1', 443))],
+            ],
+        ):
+            get_proxy_session().close()
+            rebind_resp = fresh_client.get('/sec-demo')
+            self.assertEqual(rebind_resp.status_code, 403)
+
         self.assertEqual(fresh_client.get('/login', headers={'Sec-Fetch-Dest': 'empty'}).status_code, 403)
         self.assertEqual(fresh_client.get('/admin', headers={'Sec-Fetch-Dest': 'iframe'}).status_code, 403)
+        self.assertEqual(
+            fresh_client.post('/admin/create', headers={'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'document'}).status_code,
+            403,
+        )
+        self.assertEqual(fresh_client.post('/login', data=b'a' * (1024 * 1024 + 100)).status_code, 413)
+
+        with patch.dict(os.environ, {'ENABLE_PROXY': 'true', 'PROXY_PUBLIC_BASE_URL': 'https://p.example.test'}):
+            self.assertEqual(fresh_client.get('/admin', headers={'Host': 'p.example.test'}).status_code, 404)
+            hop = fresh_client.get('/sec-demo', headers={'Host': 's.example.test'})
+            self.assertEqual(hop.status_code, 302)
+            self.assertEqual(hop.headers.get('Location'), 'https://p.example.test/sec-demo')
 
         self.assertEqual(self.login('admin', 'V7!mQ2#zL9@p').status_code, 302)
         token = csrf(self.client.get('/admin'))

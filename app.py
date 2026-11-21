@@ -1,10 +1,21 @@
-import hashlib, hmac, os, re, secrets
+import hashlib
+import hmac
+import os
+import re
+import secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
+
 import requests
 from flask import Flask, Response, abort, flash, redirect, render_template, request, url_for
+from flask_login import LoginManager, UserMixin, current_user, login_required, login_user, logout_user
+from flask_sqlalchemy import SQLAlchemy
+from flask_wtf import CSRFProtect
+from flask_wtf.csrf import CSRFError
 from proxy import (
     PROXY_COOKIE_NAME,
     PROXY_CSP,
@@ -12,18 +23,22 @@ from proxy import (
     execute_proxy_request,
     extract_raw_subpath_and_query,
     extract_referer_short_code,
+    get_effective_target_origin,
     has_valid_proxy_context,
+    is_allowed_external_netloc,
+    is_blocked_worker_request,
     is_public_proxy_target,
     parse_proxy_cookie,
+    proxy_max_request_bytes,
 )
-from flask_login import LoginManager, UserMixin, current_user, login_required, login_user, logout_user
-from flask_sqlalchemy import SQLAlchemy
-from flask_wtf import CSRFProtect
-from flask_wtf.csrf import CSRFError
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
+
+MAX_INTERNAL_CONTENT_BYTES = 1024 * 1024
+_cleanup_lock = threading.Lock()
+_last_attempt_cleanup_ts = 0.0
 
 
 def env_bool(name, default=False):
@@ -38,26 +53,49 @@ def load_secret(data_dir):
         return configured
     path = data_dir / '.secret_key'
     if path.exists():
-        return path.read_text(encoding='utf-8').strip()
+        existing = path.read_text(encoding='utf-8').strip()
+        if len(existing) >= 32:
+            return existing
     value = secrets.token_urlsafe(48)
-    path.write_text(value, encoding='utf-8')
     try:
-        path.chmod(0o600)
-    except OSError:
-        pass
-    return value
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, value.encode('utf-8'))
+        finally:
+            os.close(fd)
+        return value
+    except FileExistsError:
+        for _ in range(25):
+            if path.exists():
+                existing = path.read_text(encoding='utf-8').strip()
+                if len(existing) >= 32:
+                    return existing
+            time.sleep(0.02)
+        return path.read_text(encoding='utf-8').strip()
+
+
+def _is_internal_path(path):
+    return path in {'/', '/login', '/logout', '/healthz'} or path == '/admin' or path.startswith('/admin/')
+
+
+class RouteScopedRequest(Flask.request_class):
+    @property
+    def max_content_length(self):
+        if _is_internal_path(self.path or ''):
+            return MAX_INTERNAL_CONTENT_BYTES
+        return proxy_max_request_bytes()
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get('DATA_DIR', BASE_DIR / 'instance')).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
+app.request_class = RouteScopedRequest
 app.config.update(
     SECRET_KEY=load_secret(DATA_DIR),
     SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL', f"sqlite:///{(DATA_DIR / 'shortener.db').as_posix()}"),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     SQLALCHEMY_ENGINE_OPTIONS={'connect_args': {'timeout': 30}},
-    MAX_CONTENT_LENGTH=1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=env_bool('COOKIE_SECURE'),
@@ -84,12 +122,43 @@ def configure_sqlite(connection, _record):
         cursor = connection.cursor()
         cursor.execute('PRAGMA foreign_keys=ON')
         cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA synchronous=NORMAL')
         cursor.execute('PRAGMA busy_timeout=30000')
         cursor.close()
 
 
 def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def configured_public_base_url():
+    return os.environ.get('PUBLIC_BASE_URL', '').strip().rstrip('/')
+
+
+def configured_proxy_base_url():
+    return os.environ.get('PROXY_PUBLIC_BASE_URL', '').strip().rstrip('/')
+
+
+def _is_dedicated_proxy_host():
+    proxy_base = configured_proxy_base_url()
+    if not proxy_base:
+        return False
+    proxy_netloc = urlparse(proxy_base).netloc.lower()
+    if not proxy_netloc:
+        return False
+    pub_base = configured_public_base_url()
+    pub_netloc = urlparse(pub_base).netloc.lower() if pub_base else ''
+    if pub_netloc and proxy_netloc == pub_netloc:
+        return False
+    return (request.host or '').lower() == proxy_netloc
+
+
+def _can_user_manage_proxy_mode(user):
+    if not env_bool('ENABLE_PROXY'):
+        return False
+    if env_bool('PROXY_ADMIN_ONLY', True):
+        return bool(user and getattr(user, 'is_authenticated', False) and getattr(user, 'is_admin', False))
+    return bool(user and getattr(user, 'is_authenticated', False))
 
 
 class User(UserMixin, db.Model):
@@ -150,19 +219,42 @@ def load_user(session_id):
     return user if user and user.enabled and user.auth_version == version else None
 
 
+def _is_valid_internal_post_referer():
+    referer = request.headers.get('Referer')
+    if not referer:
+        return False
+    parsed = urlparse(referer)
+    if parsed.netloc and parsed.netloc != request.host:
+        return False
+    ref_path = parsed.path or ''
+    return ref_path == '/login' or ref_path == '/admin' or ref_path.startswith('/admin/')
+
+
 @app.before_request
 def isolate_internal_routes():
-    path = request.path
+    path = request.path or ''
+    if _is_dedicated_proxy_host() and (path == '/' or path in {'/login', '/logout'} or path == '/admin' or path.startswith('/admin/')):
+        abort(404)
+
     if path in {'/login', '/logout'} or path == '/admin' or path.startswith('/admin/'):
+        if is_blocked_worker_request():
+            abort(403)
         sec_dest = request.headers.get('Sec-Fetch-Dest')
         if sec_dest and sec_dest != 'document':
             abort(403)
         if request.method != 'GET':
+            raw_ref = request.headers.get('Referer') or ''
+            if '/_p/' in raw_ref or '/_px/' in raw_ref:
+                abort(403)
             ref_code = extract_referer_short_code(SHORT_CODE_PATTERN)
-            if ref_code and (
-                '/_p/' in (request.headers.get('Referer') or '')
-                or Link.query.filter_by(short_code=ref_code, mode='proxy').first()
-            ):
+            if ref_code and Link.query.filter_by(short_code=ref_code, mode='proxy').first():
+                abort(403)
+            has_browser_fetch_meta = bool(
+                request.headers.get('Sec-Fetch-Site')
+                or request.headers.get('Sec-Fetch-Mode')
+                or request.headers.get('Origin')
+            )
+            if has_browser_fetch_meta and not _is_valid_internal_post_referer():
                 abort(403)
 
 
@@ -171,15 +263,23 @@ def security_headers(response):
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
     if getattr(response, '_is_proxied', False):
         response.headers.setdefault('Referrer-Policy', 'same-origin')
+        response.headers.setdefault('Cross-Origin-Opener-Policy', 'unsafe-none')
         response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
         response.headers.setdefault('Content-Security-Policy', PROXY_CSP)
         if request.is_secure:
             response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
         return response
     response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Cross-Origin-Opener-Policy', 'same-origin')
+    response.headers.setdefault('Cross-Origin-Resource-Policy', 'same-origin')
     response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
     response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
-    response.headers.setdefault('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+    response.headers.setdefault(
+        'Content-Security-Policy',
+        "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; worker-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
     if request.is_secure:
         response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
     return response
@@ -192,23 +292,49 @@ def csrf_error(_error):
 
 
 def client_ip_hash():
-    return hmac.new(app.config['SECRET_KEY'].encode(), (request.remote_addr or 'unknown').encode(), hashlib.sha256).hexdigest()
+    return hmac.new(
+        app.config['SECRET_KEY'].encode(),
+        (request.remote_addr or 'unknown').encode(),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def ip_blocked(ip_hash):
     cutoff = utcnow() - timedelta(minutes=15)
-    return LoginAttempt.query.filter(LoginAttempt.ip_hash == ip_hash, LoginAttempt.succeeded.is_(False), LoginAttempt.created_at >= cutoff).count() >= 20
+    return (
+        LoginAttempt.query.filter(
+            LoginAttempt.ip_hash == ip_hash,
+            LoginAttempt.succeeded.is_(False),
+            LoginAttempt.created_at >= cutoff,
+        ).count()
+        >= 20
+    )
 
 
 def record_attempt(ip_hash, succeeded):
+    global _last_attempt_cleanup_ts
     db.session.add(LoginAttempt(ip_hash=ip_hash, succeeded=succeeded))
-    LoginAttempt.query.filter(LoginAttempt.created_at < utcnow() - timedelta(days=1)).delete()
+    now_mono = time.monotonic()
+    should_cleanup = False
+    with _cleanup_lock:
+        if now_mono - _last_attempt_cleanup_ts >= 300.0:
+            _last_attempt_cleanup_ts = now_mono
+            should_cleanup = True
+    if should_cleanup:
+        LoginAttempt.query.filter(LoginAttempt.created_at < utcnow() - timedelta(days=1)).delete()
 
 
-COMMON_PASSWORDS = {'123456', '12345678', '123456789', 'password', 'password123', 'qwerty123', 'admin123', 'letmein', 'welcome', 'iloveyou'}
+COMMON_PASSWORDS = {
+    '123456', '12345678', '123456789', 'password', 'password123',
+    'qwerty123', 'admin123', 'letmein', 'welcome', 'iloveyou',
+}
 USERNAME_PATTERN = re.compile(r'^[A-Za-z0-9_.-]{3,64}$')
 SHORT_CODE_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,50}$')
-RESERVED_SHORT_CODES = {'login', 'logout', 'admin', 'healthz', 'register', '_p', '_px'}
+RESERVED_SHORT_CODES = {
+    'login', 'logout', 'admin', 'healthz', 'register',
+    '_p', '_px', 'static', 'sw.js', 'service-worker.js',
+    'favicon.ico', 'robots.txt',
+}
 
 
 def password_error(password, username=''):
@@ -223,7 +349,13 @@ def password_error(password, username=''):
 def normalized_url(value):
     value = (value or '').strip()
     parsed = urlparse(value)
-    return value if parsed.scheme in {'http', 'https'} and parsed.hostname and not parsed.username and not parsed.password else None
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    try:
+        _ = parsed.port
+    except ValueError:
+        return None
+    return value
 
 
 def public_proxy_target(url):
@@ -254,8 +386,14 @@ def admin_required(view):
 
 @app.context_processor
 def settings():
-    configured = os.environ.get('PUBLIC_BASE_URL', '').rstrip('/')
-    return {'public_base_url': configured or request.url_root.rstrip('/'), 'proxy_enabled': env_bool('ENABLE_PROXY')}
+    pub_base = configured_public_base_url() or request.url_root.rstrip('/')
+    proxy_base = configured_proxy_base_url() or pub_base
+    return {
+        'public_base_url': pub_base,
+        'proxy_base_url': proxy_base,
+        'proxy_enabled': env_bool('ENABLE_PROXY'),
+        'can_use_proxy': _can_user_manage_proxy_mode(current_user),
+    }
 
 
 @app.route('/')
@@ -284,7 +422,14 @@ def _resolve_proxy_link(short_code):
     return link, target, f'{parsed.scheme}://{parsed.netloc}'
 
 
-def _run_proxy(target_url, target_origin, short_code, set_session_cookie=False):
+def _run_proxy(
+    target_url,
+    target_origin,
+    short_code,
+    set_session_cookie=False,
+    canonical_entry_url='',
+    is_cross_origin=False,
+):
     try:
         return execute_proxy_request(
             target_url=target_url,
@@ -293,6 +438,8 @@ def _run_proxy(target_url, target_origin, short_code, set_session_cookie=False):
             set_session_cookie=set_session_cookie,
             secret_key=app.config['SECRET_KEY'],
             target_validator=public_proxy_target,
+            canonical_entry_url=canonical_entry_url,
+            is_cross_origin=is_cross_origin,
         )
     except requests.RequestException as exc:
         app.logger.exception('代理目标访问失败: %s', target_url)
@@ -317,15 +464,26 @@ def _run_proxy(target_url, target_origin, short_code, set_session_cookie=False):
 
 
 def _try_proxy_fallback(decoded_path):
-    first_seg = decoded_path.lstrip('/').split('/', 1)[0].lower()
-    if first_seg in RESERVED_SHORT_CODES or not env_bool('ENABLE_PROXY'):
+    if is_blocked_worker_request():
+        abort(403)
+    stripped = decoded_path.lstrip('/')
+    first_seg = stripped.split('/', 1)[0].lower()
+    if stripped.lower() in RESERVED_SHORT_CODES or first_seg in RESERVED_SHORT_CODES or not env_bool('ENABLE_PROXY'):
         abort(404)
 
-    active_code = extract_referer_short_code(SHORT_CODE_PATTERN)
-    if not active_code and request.headers.get('Sec-Fetch-Mode') != 'navigate':
-        cookie_codes = parse_proxy_cookie(app.config['SECRET_KEY'], request.cookies.get(PROXY_COOKIE_NAME))
-        if cookie_codes:
-            active_code = cookie_codes[-1]
+    cookie_codes = parse_proxy_cookie(app.config['SECRET_KEY'], request.cookies.get(PROXY_COOKIE_NAME))
+    if not cookie_codes:
+        abort(404)
+
+    ref_code = extract_referer_short_code(SHORT_CODE_PATTERN)
+    active_code = None
+    if ref_code:
+        if ref_code not in cookie_codes:
+            abort(403)
+        active_code = ref_code
+    elif request.headers.get('Sec-Fetch-Mode') != 'navigate':
+        active_code = cookie_codes[-1]
+
     if not active_code:
         abort(404)
 
@@ -336,10 +494,18 @@ def _try_proxy_fallback(decoded_path):
     if not target:
         abort(410)
     parsed = urlparse(target)
-    target_origin = f'{parsed.scheme}://{parsed.netloc}'
+    entry_origin = f'{parsed.scheme}://{parsed.netloc}'
+    effective_origin = get_effective_target_origin(app.config['SECRET_KEY'], link.short_code, entry_origin)
     raw_suffix, raw_query = extract_raw_subpath_and_query('', decoded_path)
-    upstream_url = f'{target_origin}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
-    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=False)
+    upstream_url = f'{effective_origin}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
+    return _run_proxy(
+        upstream_url,
+        entry_origin,
+        link.short_code,
+        set_session_cookie=False,
+        canonical_entry_url=target,
+        is_cross_origin=False,
+    )
 
 
 @app.route('/_p/<short_code>', defaults={'subpath': ''}, methods=PROXY_METHODS)
@@ -347,14 +513,24 @@ def _try_proxy_fallback(decoded_path):
 @app.route('/_p/<short_code>/<path:subpath>', methods=PROXY_METHODS)
 @csrf.exempt
 def proxy_same_origin(short_code, subpath):
-    link, _target, target_origin = _resolve_proxy_link(short_code)
+    if is_blocked_worker_request():
+        abort(403)
+    link, target, entry_origin = _resolve_proxy_link(short_code)
     if request.method not in {'GET', 'HEAD', 'OPTIONS'} and not has_valid_proxy_context(
         app.config['SECRET_KEY'], link.short_code, SHORT_CODE_PATTERN
     ):
         abort(403)
+    effective_origin = get_effective_target_origin(app.config['SECRET_KEY'], link.short_code, entry_origin)
     raw_suffix, raw_query = extract_raw_subpath_and_query(f'/_p/{short_code}', subpath)
-    upstream_url = f'{target_origin}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
-    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=False)
+    upstream_url = f'{effective_origin}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
+    return _run_proxy(
+        upstream_url,
+        entry_origin,
+        link.short_code,
+        set_session_cookie=False,
+        canonical_entry_url=target,
+        is_cross_origin=False,
+    )
 
 
 @app.route('/_px/<short_code>/<scheme>/<netloc>', defaults={'subpath': ''}, methods=PROXY_METHODS)
@@ -362,22 +538,35 @@ def proxy_same_origin(short_code, subpath):
 @app.route('/_px/<short_code>/<scheme>/<netloc>/<path:subpath>', methods=PROXY_METHODS)
 @csrf.exempt
 def proxy_external_origin(short_code, scheme, netloc, subpath):
+    if is_blocked_worker_request():
+        abort(403)
     scheme = scheme.lower()
     if scheme not in {'http', 'https'}:
         abort(400)
+    if not is_allowed_external_netloc(scheme, netloc):
+        abort(403)
     if request.headers.get('Sec-Fetch-Mode') == 'navigate' or request.headers.get('Sec-Fetch-Dest') == 'document':
         abort(403)
     if not has_valid_proxy_context(app.config['SECRET_KEY'], short_code, SHORT_CODE_PATTERN):
         abort(403)
-    link, _target, target_origin = _resolve_proxy_link(short_code)
+    link, target, entry_origin = _resolve_proxy_link(short_code)
     raw_suffix, raw_query = extract_raw_subpath_and_query(f'/_px/{short_code}/{scheme}/{netloc}', subpath)
     upstream_url = f'{scheme}://{netloc}{raw_suffix}' + (f'?{raw_query}' if raw_query else '')
-    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=False)
+    return _run_proxy(
+        upstream_url,
+        entry_origin,
+        link.short_code,
+        set_session_cookie=False,
+        canonical_entry_url=target,
+        is_cross_origin=True,
+    )
 
 
 @app.route('/<short_code>', methods=PROXY_METHODS)
 @csrf.exempt
 def redirect_to_url(short_code):
+    if is_blocked_worker_request():
+        abort(403)
     link = Link.query.filter_by(short_code=short_code).first()
     if not link:
         return _try_proxy_fallback(short_code)
@@ -386,20 +575,41 @@ def redirect_to_url(short_code):
     target = normalized_url(link.original_url)
     if not target:
         abort(410)
+
+    if link.mode == 'proxy':
+        if not env_bool('ENABLE_PROXY'):
+            abort(403)
+        proxy_base = configured_proxy_base_url()
+        if proxy_base and not _is_dedicated_proxy_host():
+            proxy_netloc = urlparse(proxy_base).netloc.lower()
+            if proxy_netloc and proxy_netloc != (request.host or '').lower():
+                raw_q = request.environ.get('QUERY_STRING', '')
+                dest = f'{proxy_base}/{link.short_code}' + (f'?{raw_q}' if raw_q else '')
+                return redirect(dest, 302)
+        if not public_proxy_target(target):
+            abort(403)
+
     if request.method == 'GET':
-        link.clicks = Link.clicks + 1
+        Link.query.filter_by(id=link.id).update({'clicks': Link.clicks + 1}, synchronize_session=False)
         db.session.commit()
+
     if link.mode != 'proxy':
         return redirect(target, 302)
-    if not env_bool('ENABLE_PROXY') or not public_proxy_target(target):
-        abort(403)
+
     parsed = urlparse(target)
-    target_origin = f'{parsed.scheme}://{parsed.netloc}'
+    entry_origin = f'{parsed.scheme}://{parsed.netloc}'
     raw_query = request.environ.get('QUERY_STRING', '')
     upstream_url = target
     if raw_query:
         upstream_url = f'{target}&{raw_query}' if parsed.query else f'{target}?{raw_query}'
-    return _run_proxy(upstream_url, target_origin, link.short_code, set_session_cookie=True)
+    return _run_proxy(
+        upstream_url,
+        entry_origin,
+        link.short_code,
+        set_session_cookie=True,
+        canonical_entry_url=target,
+        is_cross_origin=False,
+    )
 
 
 @app.route('/<path:fallback_path>', methods=PROXY_METHODS)
@@ -459,12 +669,25 @@ def admin_dashboard():
     return render_template('admin.html', links=links)
 
 
+def _validate_requested_mode(raw_mode, target_url):
+    if raw_mode != 'proxy':
+        return 'redirect', None
+    if not _can_user_manage_proxy_mode(current_user):
+        return 'redirect', '当前未开启代理模式或仅限管理员创建代理短链。'
+    parsed = urlparse(target_url)
+    if not is_allowed_external_netloc(parsed.scheme, parsed.netloc):
+        return None, '代理模式默认仅支持标准 80/443 端口的公开 HTTP/HTTPS 站点。'
+    if not app.testing and not public_proxy_target(target_url):
+        return None, '代理目标无法解析或指向内网/保留地址，已被拒绝。'
+    return 'proxy', None
+
+
 @app.route('/admin/create', methods=['POST'])
 @login_required
 def create_link():
     target = normalized_url(request.form.get('original_url'))
     code = (request.form.get('custom_code') or '').strip()
-    mode = request.form.get('mode', 'redirect')
+    raw_mode = request.form.get('mode', 'redirect')
     if not target:
         flash('请输入有效的 HTTP/HTTPS 链接，且链接中不能包含账号凭证。', 'danger')
     elif code and not SHORT_CODE_PATTERN.fullmatch(code):
@@ -474,8 +697,20 @@ def create_link():
     elif code and Link.query.filter_by(short_code=code).first():
         flash(f'短码 “{code}” 已被占用。', 'danger')
     else:
-        mode = mode if mode in {'redirect', 'proxy'} and (mode != 'proxy' or env_bool('ENABLE_PROXY')) else 'redirect'
-        link = Link(original_url=target, short_code=code or unique_code(), note=(request.form.get('note') or '').strip()[:255], mode=mode, owner=current_user)
+        resolved_mode, mode_err = _validate_requested_mode(raw_mode, target)
+        if resolved_mode is None:
+            flash(mode_err, 'danger')
+            return redirect(url_for('admin_dashboard'))
+        if mode_err and raw_mode == 'proxy':
+            flash(mode_err, 'danger')
+            return redirect(url_for('admin_dashboard'))
+        link = Link(
+            original_url=target,
+            short_code=code or unique_code(),
+            note=(request.form.get('note') or '').strip()[:255],
+            mode=resolved_mode,
+            owner=current_user,
+        )
         db.session.add(link)
         db.session.commit()
         flash(f'短链接创建成功：{link.short_code}', 'success')
@@ -492,10 +727,14 @@ def edit_link(short_code):
     if not target:
         flash('请输入有效的 HTTP/HTTPS 链接。', 'danger')
         return redirect(url_for('edit_link', short_code=short_code))
-    mode = request.form.get('mode', 'redirect')
+    raw_mode = request.form.get('mode', 'redirect')
+    resolved_mode, mode_err = _validate_requested_mode(raw_mode, target)
+    if resolved_mode is None or (mode_err and raw_mode == 'proxy'):
+        flash(mode_err, 'danger')
+        return redirect(url_for('edit_link', short_code=short_code))
     link.original_url = target
     link.note = (request.form.get('note') or '').strip()[:255]
-    link.mode = mode if mode in {'redirect', 'proxy'} and (mode != 'proxy' or env_bool('ENABLE_PROXY')) else 'redirect'
+    link.mode = resolved_mode
     db.session.commit()
     flash(f'短码 “{short_code}” 已更新。', 'success')
     return redirect(url_for('admin_dashboard'))
